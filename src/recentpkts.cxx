@@ -6,7 +6,7 @@
 
 #include "recentpkts.hpp"
 
-bool RecentPkts::append(uint64_t id) {
+bool RecentPkts::append(const uint64_t &id) {
   // drop expired pkts + aging
   for(auto it = _pkts.begin(); it != _pkts.end(); ) {
     if(!it->second) {

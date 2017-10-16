@@ -51,6 +51,7 @@
 #include <vector>
 #include <unordered_map>
 #include <fstream>
+#include <algorithm>
 
 // own parts
 #include "cksum.h"
@@ -77,9 +78,70 @@ static int local_fd, server_fd;
 
 static unordered_map<uint32_t, time_t> remotes;
 
-struct route_via_t {
-  uint32_t router;
+struct via_router_t {
+  uint32_t addr;
   time_t   seen;
+  uint8_t  hops;
+
+  via_router_t(const uint32_t _addr, const uint8_t _hops)
+    : addr(_addr), seen(time(0)), hops(_hops) { }
+};
+
+// collection of via_route_t's
+class route_via_t {
+  std::vector<via_router_t> _routers;
+
+ public:
+  // deletes all outdates routers and sort routers
+  template<typename Fn>
+  void cleanup(const Fn f) {
+    for(auto it = _routers.begin(); it != _routers.end(); ) {
+      if(((time(0) - it->seen) > (2 * REMOTE_TIMEOUT))) {
+        f(it->addr);
+        it = _routers.erase(it);
+      } else ++it;
+    }
+
+    std::sort(_routers.begin(), _routers.end(),
+      [](const via_router_t &a, const via_router_t &b) {
+        return (a.hops < b.hops) && (a.seen > b.seen);
+      }
+    );
+  }
+
+  bool empty() const noexcept {
+    return _routers.empty();
+  }
+
+  uint32_t get_router() const {
+    if(_routers.empty()) return INADDR_ANY;
+    return _routers.front().addr;
+  }
+
+  // add or modify a router
+  bool add_router(const uint32_t router, const uint8_t hops) {
+    for(auto &i : _routers)
+      if(router == i.addr) {
+        // we found it
+        i.seen = time(0);
+        i.hops = hops;
+        return false;
+      }
+
+    _routers.emplace_back(router, hops);
+    return true;
+  }
+
+  bool del_router(const uint32_t router) {
+    for(auto it = _routers.begin(); it != _routers.end(); ) {
+      if(router == it->addr) {
+        it = _routers.erase(it);
+        return true;
+      }
+      ++it;
+    }
+    return false;
+  }
 };
 
 typedef unordered_map<uint32_t, route_via_t> routes_t;
@@ -459,37 +521,22 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   ipheader->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(ipheader), sizeof(struct ip));
 
   // update routes
-  if(!is_unknown_src) {
-    auto it = routes.find(ip_src.s_addr);
-    if(it == routes.end()) {
-      // save route if unset
-      routes[ip_src.s_addr] = { source_peer_ip, time(0) };
-      printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
-    } else if(it->second.router != source_peer_ip) {
-      printf("ROUTER WARNING: split route to %s ", inet_ntoa(ip_src));
-      // can't handle two inet_ntoa calls in one printf
-      const string d = get_remote_desc(it->second.router);
-      printf("via %s / via %s\n", d.c_str(), source_desc_c);
-      // don't update route timestamp, the route could be invalid
-    } else {
-      // update the route timestamp
-      it->second.seen = time(0);
-    }
-  }
+  if(!is_unknown_src
+    && routes[ip_src.s_addr].add_router(source_peer_ip, 255 - (ipheader->ip_ttl)))
+    printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
   bool is_broadcast = is_broadcast_addr(ip_dst) || (have_brdcip && brdcip == ip_dst);
 
   if(!is_broadcast) {
-    const auto it = routes.find(ip_dst.s_addr);
-    if(it == routes.end()) {
-      if(have_local_ip && ip_dst == local_ip) {
-        printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
-        routes[local_ip.s_addr] = { local_ip.s_addr, time(0) };
-      } else {
-        printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-        is_broadcast = true;
-      }
+    if(have_local_ip
+      && ip_dst == local_ip
+      && routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
+    {
+      printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
+    } else if(routes.find(ip_dst.s_addr) == routes.end()) {
+      printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
+      is_broadcast = true;
     }
   }
 
@@ -500,7 +547,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       ret.emplace_back(i.first);
     ret.emplace_back(local_ip.s_addr);
   } else {
-    ret.emplace_back(routes[ip_dst.s_addr].router);
+    ret.emplace_back(routes[ip_dst.s_addr].get_router());
   }
 
   // filter source_peer_ip
@@ -616,6 +663,8 @@ int main(int argc, char *argv[]) {
     }
 
     init_all(confpath);
+    fflush(stdout);
+    fflush(stderr);
   }
 
   while(1) {
@@ -668,12 +717,11 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    auto del_route = [](routes_t::iterator &it) {
+    auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
       // discard route
-      printf("ROUTER: delete route to %s ", inet_ntoa({it->first}));
-      const auto d = get_remote_desc(it->second.router);
+      printf("ROUTER: delete route to %s ", inet_ntoa({addr}));
+      const auto d = get_remote_desc(router);
       printf("via %s\n", d.c_str());
-      it = routes.erase(it);
     };
 
     for(auto it = remotes.begin(); it != remotes.end();) {
@@ -686,24 +734,30 @@ int main(int argc, char *argv[]) {
       }
 
       for(auto itr = routes.begin(); itr != routes.end();) {
-        if(itr->second.router == it->first)
-          del_route(itr);
-        else
-          ++itr;
+        if(itr->second.del_router(it->first))
+          del_route_msg(itr->first, it->first);
+
+        ++itr;
       }
 
       // discard remote
       it = remotes.erase(it);
     }
 
-    // cleanup routes not seen for 2xTIMEOUT (30 mins)
+    // cleanup routes, needs to be done after del_router calls
     for(auto it = routes.begin(); it != routes.end();) {
-      const time_t seen = it->second.seen;
-      if(((time(0) - seen) > (2 * REMOTE_TIMEOUT)))
-        del_route(it);
+      it->second.cleanup([it, del_route_msg](const uint32_t router) {
+        del_route_msg(it->first, router);
+      });
+
+      if(it->second.empty())
+        it = routes.erase(it);
       else
         ++it;
     }
+
+    // flush output
+    fflush(stdout);
   }
 
   return 0;

@@ -23,7 +23,7 @@ class RecentPkts {
    * @param id   the packet hash
    * @ret   is   already known (true -> DUP!)
    **/
-  bool append(uint64_t id);
+  bool append(const uint64_t &id);
 };
 
 #endif
