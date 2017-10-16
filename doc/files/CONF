@@ -1,0 +1,17 @@
+ZPRD configuration file [layout ...]
+
+LOCATION:
+  /etc/zrpd.conf
+
+LINE FORMAT:
+  CMD ARGS...
+
+CMDs:
+  #  comment
+  I  interface
+  R  remote
+  A  ip address (not used by daemon but by runner)
+  U  user (not used by daemon but by runner)
+
+EXAMPLE:
+  @ see doc/files/zprd.conf

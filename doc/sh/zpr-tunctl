@@ -1,0 +1,23 @@
+#!/bin/bash
+
+if [[ -z $1 || -z $2 ]]; then
+  echo "USAGE: zpr-tunctl add|del IFACE"
+  exit 1
+fi
+
+case "$1" in
+  (add)
+    ip tuntap add mode tun dev "$2"
+    ip link set dev "$2" mtu 1472
+    ip link set dev "$2" up
+    ;;
+
+  (del)
+    ip tuntap del mode tun dev "$2"
+    ;;
+
+  (*)
+    echo "zpr-tunctl: unknown command '$1'" 1>&2
+    exit 1
+    ;;
+esac

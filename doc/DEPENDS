@@ -1,0 +1,12 @@
+dependencies:
+
+ - zprd (this daemon program)
+
+ - required programs for daemontools script:
+    - cut
+    - daemontools
+    - grep
+    - iproute2
+    - sh
+    - sudo
+    - tail
