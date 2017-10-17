@@ -29,6 +29,7 @@ with firewalls, NATs and VPNs.
  - compile zprd / installation
 
   mkdir -p build && cd build
+
   cmake .. && make -j3 && make install
 
  - setup /etc/zprd.conf (content; initial)
@@ -38,9 +39,13 @@ with firewalls, NATs and VPNs.
  - setup interface (this is usually done by the daemontools)
 
   ip tuntap add mode tun user ... tun3
+
   ip addr add .../24 dev tun3
+
   # MTU = base MTU (1500) - UDP (8) - IP (20)
+
   ip link set dev tun3 mtu 1472
+
   ip link set dev tun3 up
 
  - start zprd (this is usually done by the daemontools)
