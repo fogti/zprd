@@ -49,6 +49,7 @@
 // C++
 #include <string>
 #include <vector>
+#include <set>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
@@ -76,7 +77,23 @@ using namespace std;
  **/
 static int local_fd, server_fd;
 
-static unordered_map<uint32_t, time_t> remotes;
+struct remote_peer_t {
+  time_t  seen;
+  ssize_t cent; // config entry
+
+  remote_peer_t(ssize_t cfgent = -1)
+    : seen(time(0)), cent(cfgent) { }
+
+  void refresh() {
+    seen = time(0);
+  }
+
+  bool outdated() const {
+    return (time(0) - seen) >= REMOTE_TIMEOUT;
+  }
+};
+
+static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t {
   uint32_t addr;
@@ -96,7 +113,7 @@ class route_via_t {
   template<typename Fn>
   void cleanup(const Fn f) {
     for(auto it = _routers.begin(); it != _routers.end(); ) {
-      if(((time(0) - it->seen) > (2 * REMOTE_TIMEOUT))) {
+      if((time(0) - it->seen) > (2 * REMOTE_TIMEOUT)) {
         f(it->addr);
         it = _routers.erase(it);
       } else ++it;
@@ -104,7 +121,8 @@ class route_via_t {
 
     std::sort(_routers.begin(), _routers.end(),
       [](const via_router_t &a, const via_router_t &b) {
-        return (a.hops < b.hops) && (a.seen > b.seen);
+        return (a.hops < b.hops)
+            || (a.hops == b.hops && a.seen > b.seen);
       }
     );
   }
@@ -246,13 +264,16 @@ static void init_all(const string &confpath) {
     printf("connected to interface %s\n", zprd_conf.iface.c_str());
   }
 
-  struct in_addr remote;
-  for(auto &&r : zprd_conf.remotes) {
-    if(!resolve_hostname(r.c_str(), remote))
-      continue;
-
-    remotes[remote.s_addr] = 0;
-    printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
+  {
+    struct in_addr remote;
+    size_t i = 0;
+    for(auto &&r : zprd_conf.remotes) {
+      if(resolve_hostname(r.c_str(), remote)) {
+        remotes[remote.s_addr] = remote_peer_t(i);
+        printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
+      }
+      ++i;
+    }
   }
 
   if(remotes.empty() && !zprd_conf.remotes.empty()) {
@@ -577,6 +598,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 }
 
 static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
+  remotes[sin_addr.s_addr].refresh();
   for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len))
     send_packet(dest, buffer, len);
 }
@@ -704,17 +726,8 @@ int main(int argc, char *argv[]) {
     if(FD_ISSET(server_fd, &rd_set)) {
       // data from the network: read it, and write it to the tun/tap interface.
       struct in_addr addr;
-      if(read_ip_packet(addr, buffer, nread)) {
-        {
-          const uint32_t sad = addr.s_addr;
-          const bool ireg = remotes.count(sad);
-          auto &ref = remotes[sad];
-          if(!ireg || (ireg && ref))
-            ref = time(0);
-        }
-
+      if(read_ip_packet(addr, buffer, nread))
         progress_packet(addr, buffer, nread);
-      }
     }
 
     auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
@@ -724,11 +737,15 @@ int main(int argc, char *argv[]) {
       printf("via %s\n", d.c_str());
     };
 
+    set<size_t> found_remotes;
+
     for(auto it = remotes.begin(); it != remotes.end();) {
-      // skip local, static remotes, and those which aren't timed out
-      if(it->first == local_ip.s_addr || !it->second
-        || (time(0) - it->second) < REMOTE_TIMEOUT)
-      {
+      // skip local, and remotes which aren't timed out
+      if(it->first == local_ip.s_addr || !it->second.outdated()) {
+        // update found remotes list
+        if(it->second.cent != -1)
+          found_remotes.emplace(it->second.cent);
+
         ++it;
         continue;
       }
@@ -754,6 +771,20 @@ int main(int argc, char *argv[]) {
         it = routes.erase(it);
       else
         ++it;
+    }
+
+    if(found_remotes.size() < zprd_conf.remotes.size()) {
+      struct in_addr remote;
+      size_t i = 0;
+
+      // reconnect
+      for(auto &&r : zprd_conf.remotes) {
+        if(!found_remotes.erase(i) && resolve_hostname(r.c_str(), remote)) {
+          remotes[remote.s_addr] = remote_peer_t(i);
+          printf("CLIENT: reconnected to server %s\n", inet_ntoa(remote));
+        }
+        ++i;
+      }
     }
 
     // flush output
