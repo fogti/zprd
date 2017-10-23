@@ -12,8 +12,7 @@ This folder contains additional documentation and examples for the ZPRD.
    - zpr-tunctl		a wrapper around iproute2 to simplify tun dev creation
 
  - srv			example service files
-   - init.d		  for openrc (experimental)
-   - service		  for daemontools (preferred method)
+   - service		... for daemontools (preferred method)
 
  - DEPENDS		list of dependencies of this package
  - PEERCOMM-0.0.3	notes about connections / communication with peers
