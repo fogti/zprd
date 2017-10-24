@@ -25,13 +25,10 @@
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
 #include <unistd.h>
 #include <net/if.h>
-#include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <linux/in.h>
@@ -39,10 +36,9 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
-#include <sys/time.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <errno.h>
 
@@ -55,6 +51,7 @@
 #include <algorithm>
 
 // own parts
+#include "addr.hpp"
 #include "cksum.h"
 #include "crw.h"
 #include "recentpkts.hpp"
@@ -309,20 +306,6 @@ static void init_all(const string &confpath) {
     perror("bind()");
     exit(1);
   }
-}
-
-static bool operator==(const in_addr &a, const in_addr &b) {
-  return (a.s_addr == b.s_addr);
-}
-
-static bool operator!=(const in_addr &a, const in_addr &b) {
-  return !(a == b);
-}
-
-// is_broadcast_addr: checks if the given addr is a broadcast address
-static bool is_broadcast_addr(const struct in_addr &a) {
-  const in_addr_t ip_raddr = ntohl(a.s_addr);
-  return (ip_raddr == INADDR_ANY || ip_raddr == INADDR_BROADCAST);
 }
 
 static bool get_local_xxxip_generic(struct in_addr &ret, struct ifreq &ifr, const unsigned long what, struct sockaddr &sa) {
