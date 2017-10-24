@@ -81,8 +81,11 @@ struct remote_peer_t {
   time_t  seen;
   ssize_t cent; // config entry
 
-  remote_peer_t(ssize_t cfgent = -1)
-    : seen(time(0)), cent(cfgent) { }
+  remote_peer_t()
+    : seen(time(0)), cent(-1) { }
+
+  explicit remote_peer_t(size_t cfgent)
+    : seen(time(0)), cent(static_cast<ssize_t>(cfgent)) { }
 
   void refresh() {
     seen = time(0);
@@ -232,6 +235,9 @@ static void init_all(const string &confpath) {
 
     if(!run_as_user.empty()) {
       printf("running daemon as user: '%s'\n", run_as_user.c_str());
+
+      // NOTE: we don't need to use getpwnam_r because this function is always
+      //  called before threads are spawned
       struct passwd *pwresult = getpwnam(run_as_user.c_str());
 
       if(!pwresult) {
@@ -371,18 +377,18 @@ static int send_packet(const uint32_t ent, const char *buffer, const int buflen)
  **/
 static void set_ip_df(const struct ip *h_ip) {
   const bool df = h_ip->ip_off & htons(IP_DF);
-  const int tmp_df =
+  const int tmp_df = df ?
 #if defined(IP_DONTFRAG)
-    df ? 1 : 0;
+    1 : 0;
   if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
     perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
 #elif defined(IP_MTU_DISCOVER)
-    df ? IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
+    IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
   if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
     perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
 #else
 # warning "set_ip_df: no method available to manage the dont-frag bit"
-    0;
+    0 : 0;
 #endif
 }
 
@@ -430,7 +436,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
       break;
 
     default:
-      printf("SEND ERROR: invalid ZICMP Message code: %u", msg);
+      printf("SEND ERROR: invalid ZICMP Message code: %d\n", msg);
       exit(1);
   }
 
@@ -659,7 +665,7 @@ int main(int argc, char *argv[]) {
       if(cur.empty()) continue;
 
       if(cur == "-h" || cur == "--help") {
-        printf("USAGE: zprd [--help] [L<logfile>] [C<conffile>]");
+        puts("USAGE: zprd [--help] [L<logfile>] [C<conffile>]");
         return 0;
       }
 
