@@ -319,6 +319,12 @@ static bool operator!=(const in_addr &a, const in_addr &b) {
   return !(a == b);
 }
 
+// is_broadcast_addr: checks if the given addr is a broadcast address
+static bool is_broadcast_addr(const struct in_addr &a) {
+  const in_addr_t ip_raddr = ntohl(a.s_addr);
+  return (ip_raddr == INADDR_ANY || ip_raddr == INADDR_BROADCAST);
+}
+
 static bool get_local_xxxip_generic(struct in_addr &ret, struct ifreq &ifr, const unsigned long what, struct sockaddr &sa) {
   memset(&ret, 0, sizeof(ret));
 
@@ -337,12 +343,6 @@ static bool get_local_xxxip_generic(struct in_addr &ret, struct ifreq &ifr, cons
   ret = reinterpret_cast<struct sockaddr_in*>(&sa)->sin_addr;
 
   return true;
-}
-
-// is_broadcast_addr: checks if the given addr is a broadcast address
-static bool is_broadcast_addr(const struct in_addr &a) {
-  const in_addr_t ip_raddr = ntohl(a.s_addr);
-  return (ip_raddr == INADDR_ANY || ip_raddr == INADDR_BROADCAST);
 }
 
 // get_remote_desc: returns a description string of socket ip
@@ -473,11 +473,8 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
  * @ret             the ips of the destination sockets
  **/
 static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
-  static RecentPkts rctpkts;
-
   // broadcast ip
-  struct in_addr brdcip;
-  brdcip.s_addr = (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr);
+  const struct in_addr brdcip = { (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr) };
   const bool have_brdcip = have_local_ip && have_local_netmask;
 
   vector<uint32_t> ret;
@@ -535,7 +532,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   // check this late (don't register discarded packets)
   // use case : two ways to one destination, merge at destination (or before)
-  if(rctpkts.append(in_hashsum(reinterpret_cast<const uint8_t*>(buffer), buflen))) {
+  if(RecentPkts_append(in_hashsum(reinterpret_cast<const uint8_t*>(buffer), buflen))) {
     printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
     return ret;
   }
