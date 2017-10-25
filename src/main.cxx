@@ -356,6 +356,65 @@ static string get_remote_desc(const uint32_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
+/** parse_control_message:
+ * detects if a block is a control message (ICMP)
+ * updates the routing table (drops outdated entries)
+ *
+ * @param src_addr  the source router
+ * @param buffer    the buffer
+ * @param buflen    the length of the buffer
+ * @ret             discard packet?
+ **/
+static bool parse_control_message(const uint32_t &src_addr, const char *buffer, const int buflen) {
+  {
+    constexpr const uint16_t expect_buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr);
+    if(!buffer || buflen != expect_buflen) return false;
+  }
+
+  const struct ip * const h_ip = reinterpret_cast<const struct ip*>(buffer);
+  const struct icmphdr * const h_icmp = reinterpret_cast<const struct icmphdr*>(buffer + sizeof(struct ip));
+
+  if(h_ip->ip_p != IPPROTO_ICMP) return false;
+  if(in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr))) {
+    printf("ROUTER ERROR: invalid icmp packet (wrong checksum; chksum = %u)\n", h_icmp->checksum);
+    return true;
+  }
+
+  bool discard_route = false;
+
+  switch(h_icmp->type) {
+    case ICMP_TIMXCEED:
+      if(h_icmp->code == ICMP_TIMXCEED_INTRANS)
+        discard_route = true;
+      break;
+
+    case ICMP_UNREACH:
+      switch(h_icmp->code) {
+        case ICMP_UNREACH_HOST:
+        case ICMP_UNREACH_NET:
+          discard_route = true;
+          break;
+      }
+      break;
+
+    default:
+      return false;
+  }
+
+  if(discard_route) {
+    const struct ip * const h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
+    const uint32_t router = src_addr;             // dropped from
+    const uint32_t target = h_ip2->ip_dst.s_addr; // original destination
+    if(routes[target].del_router(router)) {
+      printf("ROUTER: delete route to %s ", inet_ntoa({target}));
+      const auto d = get_remote_desc(router);
+      printf("via %s\n", d.c_str());
+    }
+  }
+
+  return false;
+}
+
 /** send_packet:
  * handles the sending of packets to a remote or local (identified by a)
  *
@@ -397,7 +456,7 @@ static void set_ip_df(const struct ip *h_ip) {
 }
 
 enum zprd_icmpe {
-  ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_QUENCH
+  ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET, ZICMPM_QUENCH
 };
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
@@ -433,6 +492,11 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
     case ZICMPM_UNREACH:
       h_icmp->type = ICMP_UNREACH;
       h_icmp->code = ICMP_UNREACH_HOST;
+      break;
+
+    case ZICMPM_UNREACH_NET:
+      h_icmp->type = ICMP_UNREACH;
+      h_icmp->code = ICMP_UNREACH_NET;
       break;
 
     case ZICMPM_QUENCH:
@@ -590,9 +654,9 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(!is_unknown_src && !is_broadcast && !is_icmp_errmsg) {
       if(have_local_netmask && (local_ip.s_addr & local_netmask.s_addr) != (ip_dst.s_addr & local_netmask.s_addr))
-        { } // we aren't in the same subnet as the destination
+        send_icmp_msg(ZICMPM_UNREACH_NET, ipheader, source_peer_ip);
       else
-        send_icmp_msg(ZICMPM_UNREACH, ipheader, source_peer_ip);
+        send_icmp_msg(ZICMPM_UNREACH,     ipheader, source_peer_ip);
 
       // to prevent routing loops
       // drop routing table entry, if there is any
@@ -616,8 +680,15 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
 static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
   remotes[sin_addr.s_addr].refresh();
-  for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len))
-    send_packet(dest, buffer, len);
+  for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len)) {
+    bool discard = false;
+
+    if((have_local_ip && dest == local_ip.s_addr) || (dest == htonl(0)))
+      discard = parse_control_message(sin_addr.s_addr, buffer, len);
+
+    if(!discard)
+      send_packet(dest, buffer, len);
+  }
 }
 
 /** read_ip_packet
