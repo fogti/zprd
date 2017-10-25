@@ -45,6 +45,7 @@
 // C++
 #include <string>
 #include <vector>
+#include <forward_list>
 #include <set>
 #include <unordered_map>
 #include <fstream>
@@ -60,7 +61,6 @@
 
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 65536
-#define DATA_PORT 45940
 
 // timeout in seconds after which remotes are silently discarded
 #define REMOTE_TIMEOUT 900 // 0.25 hour
@@ -73,6 +73,9 @@ using namespace std;
  * server_fd = the server udp socket
  **/
 static int local_fd, server_fd;
+
+/** data port **/
+static uint16_t data_port;
 
 struct remote_peer_t {
   time_t  seen;
@@ -106,20 +109,23 @@ struct via_router_t {
 
 // collection of via_route_t's
 class route_via_t {
-  std::vector<via_router_t> _routers;
+  std::forward_list<via_router_t> _routers;
 
  public:
   // deletes all outdates routers and sort routers
   template<typename Fn>
   void cleanup(const Fn f) {
-    for(auto it = _routers.begin(); it != _routers.end(); ) {
-      if((time(0) - it->seen) > (2 * REMOTE_TIMEOUT)) {
-        f(it->addr);
-        it = _routers.erase(it);
-      } else ++it;
-    }
+    _routers.remove_if(
+      [f](const via_router_t &a) {
+        if((time(0) - a.seen) < (2 * REMOTE_TIMEOUT))
+          return false;
 
-    std::sort(_routers.begin(), _routers.end(),
+        f(a.addr);
+        return true;
+      }
+    );
+
+    _routers.sort(
       [](const via_router_t &a, const via_router_t &b) {
         return (a.hops < b.hops)
             || (a.hops == b.hops && a.seen > b.seen);
@@ -131,9 +137,8 @@ class route_via_t {
     return _routers.empty();
   }
 
-  uint32_t get_router() const {
-    if(_routers.empty()) return INADDR_ANY;
-    return _routers.front().addr;
+  uint32_t get_router() const noexcept {
+    return empty() ? INADDR_ANY : _routers.front().addr;
   }
 
   // add or modify a router
@@ -146,19 +151,26 @@ class route_via_t {
         return false;
       }
 
-    _routers.emplace_back(router, hops);
+    _routers.emplace_front(router, hops);
     return true;
   }
 
   bool del_router(const uint32_t router) {
-    for(auto it = _routers.begin(); it != _routers.end(); ) {
-      if(router == it->addr) {
-        it = _routers.erase(it);
-        return true;
+    bool ret = false;
+    _routers.remove_if(
+      [router, &ret](const via_router_t &a) -> bool {
+        const bool tmp = (router == a.addr);
+        ret = ret || tmp;
+        return tmp;
       }
-      ++it;
-    }
-    return false;
+    );
+    return ret;
+  }
+
+  bool del_primary_router() noexcept {
+    if(empty()) return false;
+    _routers.pop_front();
+    return true;
   }
 };
 
@@ -197,6 +209,11 @@ static void init_all(const string &confpath) {
       exit(1);
     }
 
+    /** DEFAULTS
+     *  (data_port) P45940
+     **/
+    data_port = 45940;
+
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
 
@@ -207,16 +224,20 @@ static void init_all(const string &confpath) {
         case '#':
           break;
 
+        case 'A':
+          // used and applied by startup script
+          break;
+
         case 'I':
           zprd_conf.iface = line.substr(1);
           break;
 
-        case 'R':
-          zprd_conf.remotes.emplace_back(line.substr(1));
+        case 'P':
+          data_port = stoi(line.substr(1));
           break;
 
-        case 'A':
-          // used and applied by startup script
+        case 'R':
+          zprd_conf.remotes.emplace_back(line.substr(1));
           break;
 
         case 'U':
@@ -301,7 +322,7 @@ static void init_all(const string &confpath) {
   memset(&local, 0, sizeof(local));
   local.sin_family = AF_INET;
   local.sin_addr.s_addr = htonl(INADDR_ANY);
-  local.sin_port = htons(DATA_PORT);
+  local.sin_port = htons(data_port);
   if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&local), sizeof(local)) < 0) {
     perror("bind()");
     exit(1);
@@ -351,7 +372,7 @@ static int send_packet(const uint32_t ent, const char *buffer, const int buflen)
   memset(&dsta, 0, sizeof(dsta));
   dsta.sin_family = AF_INET;
   dsta.sin_addr.s_addr = ent;
-  dsta.sin_port = htons(DATA_PORT);
+  dsta.sin_port = htons(data_port);
   return csendto(server_fd, buffer, buflen, &dsta);
 }
 
@@ -557,7 +578,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     ret.emplace_back(routes[ip_dst.s_addr].get_router());
   }
 
-  // filter source_peer_ip
+  // split horizon
   for(auto it = ret.begin(); it != ret.end();) {
     if(*it == source_peer_ip)
       it = ret.erase(it);
@@ -572,6 +593,16 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
         { } // we aren't in the same subnet as the destination
       else
         send_icmp_msg(ZICMPM_UNREACH, ipheader, source_peer_ip);
+
+      // to prevent routing loops
+      // drop routing table entry, if there is any
+      auto &route = routes[ip_dst.s_addr];
+      const auto router = route.get_router();
+      if(route.del_primary_router()) {
+        printf("ROUTER: delete route to %s ", inet_ntoa({ip_dst.s_addr}));
+        const auto d = get_remote_desc(router);
+        printf("via %s\n", d.c_str());
+      }
     }
   } else {
     // setup outer headers
