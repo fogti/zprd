@@ -143,22 +143,27 @@ class route_via_t {
 
   // add or modify a router
   bool add_router(const uint32_t router, const uint8_t hops) {
-    for(auto &i : _routers)
-      if(router == i.addr) {
-        // we found it
-        i.seen = time(0);
-        i.hops = hops;
-        return false;
+    const auto it_e = _routers.end();
+    const auto it = find_if(_routers.begin(), it_e,
+      [router](const via_router_t &i) noexcept {
+        return i.addr == router;
       }
+    );
 
-    _routers.emplace_front(router, hops);
-    return true;
+    const bool ret = (it == it_e);
+    if(ret) {
+      _routers.emplace_front(router, hops);
+    } else {
+      it->seen = time(0);
+      it->hops = hops;
+    }
+    return ret;
   }
 
   bool del_router(const uint32_t router) {
     bool ret = false;
     _routers.remove_if(
-      [router, &ret](const via_router_t &a) -> bool {
+      [router, &ret](const via_router_t &a) noexcept -> bool {
         const bool tmp = (router == a.addr);
         ret = ret || tmp;
         return tmp;
@@ -643,11 +648,9 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   }
 
   // split horizon
-  for(auto it = ret.begin(); it != ret.end();) {
-    if(*it == source_peer_ip)
-      it = ret.erase(it);
-    else
-      ++it;
+  {
+    const auto it_e = ret.end();
+    ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
   }
 
   if(ret.empty()) {
