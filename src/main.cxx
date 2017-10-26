@@ -370,7 +370,7 @@ static string get_remote_desc(const uint32_t addr) {
  * @param buflen    the length of the buffer
  * @ret             discard packet?
  **/
-static bool parse_control_message(const uint32_t &src_addr, const char *buffer, const int buflen) {
+static bool parse_control_message(const uint32_t src_addr, const char *buffer, const int buflen) {
   {
     constexpr const uint16_t expect_buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr);
     if(!buffer || buflen != expect_buflen) return false;
@@ -554,19 +554,19 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   const string source_desc = get_remote_desc(source_peer_ip);
   const char * const source_desc_c = source_desc.c_str();
 
-  struct ip *ipheader = reinterpret_cast<struct ip*>(buffer);
-  const uint16_t pkid = ntohs(ipheader->ip_id);
+  struct ip *h_ip = reinterpret_cast<struct ip*>(buffer);
+  const uint16_t pkid = ntohs(h_ip->ip_id);
 
   // get packet src/dst ips
-  const struct in_addr &ip_src = ipheader->ip_src;
-  const struct in_addr &ip_dst = ipheader->ip_dst;
+  const struct in_addr &ip_src = h_ip->ip_src;
+  const struct in_addr &ip_dst = h_ip->ip_dst;
 
   const bool is_unknown_src = is_broadcast_addr(ip_src) || (have_brdcip && brdcip == ip_src);
 
   /* is_icmp_errmsg : flag if packet is an icmp error message
    *   reason : an echo packet could be used to establish an route without interference on application protos
    */
-  const bool is_icmp_errmsg = (ipheader->ip_p == IPPROTO_ICMP)
+  const bool is_icmp_errmsg = (h_ip->ip_p == IPPROTO_ICMP)
     && ([buffer, buflen]() -> bool {
       if((sizeof(struct ip) + sizeof(struct icmphdr) > buflen)) return true;
       struct icmphdr * icmpheader = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
@@ -590,16 +590,16 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     // packet is too big
     printf("ROUTER: drop packet %u (too big, size = %u) from %s\n", pkid, buflen, source_desc_c);
     if(!is_unknown_src && !is_icmp_errmsg)
-      send_icmp_msg(ZICMPM_QUENCH, ipheader, source_peer_ip);
+      send_icmp_msg(ZICMPM_QUENCH, h_ip, source_peer_ip);
     return ret;
   }
 
   // we can use the ttl directly, it is 1 byte long
-  if((!ipheader->ip_ttl) || (!iam_ep && ipheader->ip_ttl == 1)) {
+  if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
     // ttl is too low -> DROP
-    printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, ipheader->ip_ttl, source_desc_c);
+    printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
     if(!is_unknown_src && !is_icmp_errmsg)
-      send_icmp_msg(ZICMPM_TTL, ipheader, source_peer_ip);
+      send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
     return ret;
   }
 
@@ -611,15 +611,15 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   }
 
   // decrement ttl
-  if(!iam_ep) --(ipheader->ip_ttl);
+  if(!iam_ep) --(h_ip->ip_ttl);
 
   // update checksum (because we changed the header)
-  ipheader->ip_sum = 0;
-  ipheader->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(ipheader), sizeof(struct ip));
+  h_ip->ip_sum = 0;
+  h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
 
   // update routes
   if(!is_unknown_src
-    && routes[ip_src.s_addr].add_router(source_peer_ip, 255 - (ipheader->ip_ttl)))
+    && routes[ip_src.s_addr].add_router(source_peer_ip, 255 - (h_ip->ip_ttl)))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
@@ -649,17 +649,22 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   // split horizon
   {
+    const auto sbef = ret.size();
     const auto it_e = ret.end();
     ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
+    if(sbef != ret.size()) {
+      // size changed
+      printf("ROUTER DEBUG: packet %u: dropped source peer ip from broadcast list\n", pkid);
+    }
   }
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(!is_unknown_src && !is_broadcast && !is_icmp_errmsg) {
       if(have_local_netmask && (local_ip.s_addr & local_netmask.s_addr) != (ip_dst.s_addr & local_netmask.s_addr))
-        send_icmp_msg(ZICMPM_UNREACH_NET, ipheader, source_peer_ip);
+        send_icmp_msg(ZICMPM_UNREACH_NET, h_ip, source_peer_ip);
       else
-        send_icmp_msg(ZICMPM_UNREACH,     ipheader, source_peer_ip);
+        send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
 
       // to prevent routing loops
       // drop routing table entry, if there is any
@@ -673,8 +678,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     }
   } else {
     // setup outer headers
-    set_ip_df(ipheader);
-    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ipheader->ip_tos, sizeof(ipheader->ip_tos)) < 0)
+    set_ip_df(h_ip);
+    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
   }
 
@@ -698,7 +703,7 @@ static void progress_packet(const struct in_addr &sin_addr, char buffer[], const
  * reads an variable length ipv4 packet
  *
  * @param srca    (out) the source ip
- * @param buffer  (out) the target storage
+ * @param buffer  (out) the target storage (with size BUFSIZE)
  * @param len     (out) the length of the packet
  * @ret           succesful marker
  **/
@@ -715,23 +720,23 @@ static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
     return false;
   }
 
-  const struct ip *const ipheader = reinterpret_cast<struct ip*>(buffer);
-  if(ipheader->ip_v != 4) {
-    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", ipheader->ip_v, source_desc_c);
+  const struct ip *const h_ip = reinterpret_cast<struct ip*>(buffer);
+  if(h_ip->ip_v != 4) {
+    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", h_ip->ip_v, source_desc_c);
     return false;
   }
 
   {
-    const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(ipheader), sizeof(struct ip));
+    const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
     if(dsum) {
       printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
-             ipheader->ip_sum, dsum, source_desc_c);
+             h_ip->ip_sum, dsum, source_desc_c);
       return false;
     }
   }
 
   // get total length
-  len = ntohs(ipheader->ip_len);
+  len = ntohs(h_ip->ip_len);
 
   if(nread < len) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u) from %s\n", nread, source_desc_c);
@@ -781,44 +786,45 @@ int main(int argc, char *argv[]) {
   }
 
   while(1) {
-    {
-      struct ifreq ifr;
-      have_local_ip      = get_local_xxxip_generic(local_ip,      ifr, SIOCGIFADDR,    ifr.ifr_addr);
-      have_local_netmask = get_local_xxxip_generic(local_netmask, ifr, SIOCGIFNETMASK, ifr.ifr_netmask);
-    }
+    { // use select() to handle two descriptors at once
+      fd_set rd_set;
+      FD_ZERO(&rd_set);
+      FD_SET(local_fd, &rd_set);
+      FD_SET(server_fd, &rd_set);
+      const int maxfd = (server_fd > local_fd) ? server_fd : local_fd;
 
-    if(have_local_ip && !have_local_netmask) {
-      printf("ROUTER ERROR: got local ip but no local netmask ip\n");
-      exit(1);
-    }
+      if(select(maxfd + 1, &rd_set, 0, 0, 0) < 0) {
+        if(errno == EINTR) continue;
+        perror("select()");
+        exit(1);
+      }
 
-    // use select() to handle two descriptors at once
-    fd_set rd_set;
-    FD_ZERO(&rd_set);
-    FD_SET(local_fd, &rd_set);
-    FD_SET(server_fd, &rd_set);
-    const int maxfd = (server_fd > local_fd) ? server_fd : local_fd;
+      { // get local ip + netmask after select to get up-to-date results
+        struct ifreq ifr;
+        have_local_ip      = get_local_xxxip_generic(local_ip,      ifr, SIOCGIFADDR,    ifr.ifr_addr);
+        have_local_netmask = get_local_xxxip_generic(local_netmask, ifr, SIOCGIFNETMASK, ifr.ifr_netmask);
+      }
 
-    if(select(maxfd + 1, &rd_set, 0, 0, 0) < 0) {
-      if(errno == EINTR) continue;
-      perror("select()");
-      exit(1);
-    }
+      if(have_local_ip && !have_local_netmask) {
+        printf("ROUTER ERROR: got local ip but no local netmask ip\n");
+        exit(1);
+      }
 
-    uint16_t nread;
-    char buffer[BUFSIZE];
+      uint16_t nread;
+      char buffer[BUFSIZE];
 
-    if(FD_ISSET(local_fd, &rd_set)) {
-      // data from tun/tap: just read it and write it to the network
-      nread = cread(local_fd, buffer, BUFSIZE);
-      progress_packet(local_ip, buffer, nread);
-    }
+      if(FD_ISSET(local_fd, &rd_set)) {
+        // data from tun/tap: just read it and write it to the network
+        nread = cread(local_fd, buffer, BUFSIZE);
+        progress_packet(local_ip, buffer, nread);
+      }
 
-    if(FD_ISSET(server_fd, &rd_set)) {
-      // data from the network: read it, and write it to the tun/tap interface.
-      struct in_addr addr;
-      if(read_ip_packet(addr, buffer, nread))
-        progress_packet(addr, buffer, nread);
+      if(FD_ISSET(server_fd, &rd_set)) {
+        // data from the network: read it, and write it to the tun/tap interface.
+        struct in_addr addr;
+        if(read_ip_packet(addr, buffer, nread))
+          progress_packet(addr, buffer, nread);
+      }
     }
 
     auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
@@ -865,11 +871,11 @@ int main(int argc, char *argv[]) {
     }
 
     if(found_remotes.size() < zprd_conf.remotes.size()) {
-      struct in_addr remote;
       size_t i = 0;
 
       // reconnect
       for(auto &&r : zprd_conf.remotes) {
+        struct in_addr remote;
         if(!found_remotes.erase(i) && resolve_hostname(r.c_str(), remote)) {
           remotes[remote.s_addr] = remote_peer_t(i);
           printf("CLIENT: reconnected to server %s\n", inet_ntoa(remote));

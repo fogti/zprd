@@ -17,6 +17,6 @@
  * @param id   the packet hash
  * @ret        is already known (true -> DUP!)
  **/
-bool RecentPkts_append(const uint64_t &id);
+bool RecentPkts_append(const uint64_t id);
 
 #endif
