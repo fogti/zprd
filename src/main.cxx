@@ -365,11 +365,15 @@ static string get_remote_desc(const uint32_t addr) {
  * detects if a block is a control message (ICMP)
  * updates the routing table (drops outdated entries)
  *
+ * TODO: doesn't work yet. We can't detect, if the router, which
+ * sent the control message, is responsible for this client and
+ * had provided a route to this client.
+ *
  * @param src_addr  the source router
  * @param buffer    the buffer
  * @param buflen    the length of the buffer
  * @ret             discard packet?
- **/
+ **/ /*
 static bool parse_control_message(const uint32_t src_addr, const char *buffer, const int buflen) {
   {
     constexpr const uint16_t expect_buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr);
@@ -419,6 +423,7 @@ static bool parse_control_message(const uint32_t src_addr, const char *buffer, c
 
   return false;
 }
+*/
 
 /** send_packet:
  * handles the sending of packets to a remote or local (identified by a)
@@ -693,12 +698,14 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
   remotes[sin_addr.s_addr].refresh();
   for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len)) {
+    /*
     bool discard = false;
 
     if((have_local_ip && dest == local_ip.s_addr) || (dest == htonl(0)))
       discard = parse_control_message(sin_addr.s_addr, buffer, len);
 
     if(!discard)
+    */
       send_packet(dest, buffer, len);
   }
 }
