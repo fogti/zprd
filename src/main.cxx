@@ -647,24 +647,27 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     ret.emplace_back(routes[ip_dst.s_addr].get_router());
   }
 
+  const bool netmask_match = have_local_netmask && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr);
+
   // split horizon
   {
-    const auto sbef = ret.size();
-    const auto it_e = ret.end();
+    auto it_e = ret.end();
     ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
-    if(sbef != ret.size()) {
-      // size changed
-      printf("ROUTER DEBUG: packet %u: dropped source peer ip from broadcast list\n", pkid);
+
+    if(!is_broadcast && netmask_match && ip_dst != local_ip) {
+      // catch bouncing packets in *local iface* network earlier
+      it_e = ret.end();
+      ret.erase(std::remove(ret.begin(), it_e, local_ip.s_addr), it_e);
     }
   }
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(!is_unknown_src && !is_broadcast && !is_icmp_errmsg) {
-      if(have_local_netmask && (local_ip.s_addr & local_netmask.s_addr) != (ip_dst.s_addr & local_netmask.s_addr))
-        send_icmp_msg(ZICMPM_UNREACH_NET, h_ip, source_peer_ip);
-      else
+      if(netmask_match)
         send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
+      else
+        send_icmp_msg(ZICMPM_UNREACH_NET, h_ip, source_peer_ip);
 
       // to prevent routing loops
       // drop routing table entry, if there is any
