@@ -623,7 +623,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
-  bool is_broadcast = is_broadcast_addr(ip_dst) || (have_brdcip && brdcip == ip_dst);
+  const bool broadcast_is_dst = is_broadcast_addr(ip_dst) || (have_brdcip && brdcip == ip_dst);
+  bool is_broadcast = broadcast_is_dst;
 
   if(!is_broadcast) {
     if(have_local_ip
@@ -654,7 +655,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     auto it_e = ret.end();
     ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
 
-    if(!is_broadcast && netmask_match && ip_dst != local_ip) {
+    if(!broadcast_is_dst && netmask_match && ip_dst != local_ip) {
       // catch bouncing packets in *local iface* network earlier
       it_e = ret.end();
       ret.erase(std::remove(ret.begin(), it_e, local_ip.s_addr), it_e);
@@ -663,7 +664,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
-    if(!is_unknown_src && !is_broadcast && !is_icmp_errmsg) {
+    if(!is_unknown_src && !broadcast_is_dst && !is_icmp_errmsg) {
       if(netmask_match)
         send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
       else
