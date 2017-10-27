@@ -409,8 +409,8 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   char buffer[buflen];
 
-  struct ip * const h_ip = reinterpret_cast<struct ip*>(buffer);
-  struct icmphdr * const h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
+  const auto h_ip = reinterpret_cast<struct ip*>(buffer);
+  const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
 
   memset(buffer, 0, buflen);
 
@@ -500,7 +500,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   const string source_desc    = get_remote_desc(source_peer_ip);
   const auto source_desc_c    = source_desc.c_str();
 
-  struct ip *h_ip             = reinterpret_cast<struct ip*>(buffer);
+  const auto h_ip             = reinterpret_cast<struct ip*>(buffer);
   const uint16_t pkid         = ntohs(h_ip->ip_id);
 
   const auto &ip_src          = h_ip->ip_src;
@@ -521,7 +521,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
    */
   const bool is_icmp_errmsg = is_icmp
     && ([buffer]() -> bool {
-      struct icmphdr * h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
+      const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
       switch(h_icmp->type) {
         case ICMP_ECHO:      // = 8
         case ICMP_ECHOREPLY: // = 0
@@ -635,7 +635,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   } else {
     // drop outdated routing table entries
     if(is_icmp_errmsg && ((2 * sizeof(struct ip) + sizeof(struct icmphdr)) <= buflen)) {
-      struct icmphdr * h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
+      const auto h_icmp = reinterpret_cast<const struct icmphdr*>(buffer + sizeof(ip));
       bool rm_route = false;
       switch(h_icmp->type) {
         case ICMP_TIMXCEED:
@@ -653,22 +653,19 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       }
       if(rm_route) {
         // drop routing table entry, if there is any
-        const struct ip * const h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
-        const uint32_t target = h_ip2->ip_dst.s_addr; // original destination
-        auto &route = routes[target];
-        if(route.empty()) {
-          // no routing table entry -> just forward
-        } else if(route.del_router(source_peer_ip)) {
-          // routing table entry dropped
-          printf("ROUTER: delete route to %s ", inet_ntoa({target}));
-          const auto d = get_remote_desc(source_peer_ip);
-          printf("via %s\n", d.c_str());
-
-          // if there is a routing table entry left -> don't forward
+        const auto h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
+        const auto target = h_ip2->ip_dst; // original destination
+        const auto rit = routes.find(target.s_addr);
+        if(rit != routes.end() && !rit->second.empty()) {
+          auto &route = rit->second;
+          if(route.del_router(source_peer_ip)) {
+            // routing table entry dropped
+            printf("ROUTER: delete route to %s ", inet_ntoa(target));
+            const auto d = get_remote_desc(source_peer_ip);
+            printf("via %s\n", d.c_str());
+          }
+          // if there is a routing table entry left -> discard
           if(!route.empty()) ret.clear();
-        } else {
-          // no routing table entry dropped -> discard
-          ret.clear();
         }
       }
     }
@@ -711,7 +708,7 @@ static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
     return false;
   }
 
-  const struct ip *const h_ip = reinterpret_cast<struct ip*>(buffer);
+  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
   if(h_ip->ip_v != 4) {
     printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", h_ip->ip_v, source_desc_c);
     return false;
