@@ -592,7 +592,6 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   // get route to destination
   if(is_broadcast) {
-    printf("ROUTER: broadcast packet %u from %s\n", pkid, source_desc_c);
     for(auto &&i : remotes)
       ret.emplace_back(i.first);
     ret.emplace_back(local_ip.s_addr);
@@ -602,8 +601,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   const bool netmask_match = have_local_netmask && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr);
 
-  // split horizon
-  {
+  { // split horizon
     auto it_e = ret.end();
     ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
 
@@ -687,6 +685,35 @@ static void progress_packet(const struct in_addr &sin_addr, char buffer[], const
     send_packet(dest, buffer, len);
 }
 
+/** is_ipv4_packet
+ * checks, if packet is a valid ipv4 packet
+ *
+ * @param buffer  the packet data
+ * @param len     the length of the packet
+ * @ret           is valid
+ **/
+static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) {
+  if(sizeof(struct ip) > len) {
+    printf("ROUTER ERROR: received invalid ip packet (too small, size = %u) from %s\n", len, source_desc_c);
+    return false;
+  }
+
+  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
+  if(h_ip->ip_v != 4) {
+    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", h_ip->ip_v, source_desc_c);
+    return false;
+  }
+
+  const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+  if(dsum) {
+    printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
+           h_ip->ip_sum, dsum, source_desc_c);
+    return false;
+  }
+
+  return true;
+}
+
 /** read_ip_packet
  * reads an variable length ipv4 packet
  *
@@ -703,28 +730,10 @@ static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   const string source_desc = get_remote_desc(srca.s_addr);
   const char * const source_desc_c = source_desc.c_str();
 
-  if(sizeof(struct ip) > nread) {
-    printf("ROUTER ERROR: invalid ip packet (too small, size = %u) from %s\n", nread, source_desc_c);
-    return false;
-  }
-
-  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
-  if(h_ip->ip_v != 4) {
-    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", h_ip->ip_v, source_desc_c);
-    return false;
-  }
-
-  {
-    const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
-    if(dsum) {
-      printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
-             h_ip->ip_sum, dsum, source_desc_c);
-      return false;
-    }
-  }
+  if(!is_ipv4_packet(source_desc_c, buffer, nread)) return false;
 
   // get total length
-  len = ntohs(h_ip->ip_len);
+  len = ntohs(reinterpret_cast<const struct ip*>(buffer)->ip_len);
 
   if(nread < len) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u) from %s\n", nread, source_desc_c);
@@ -735,8 +744,7 @@ static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
 }
 
 int main(int argc, char *argv[]) {
-  // parse command line
-  {
+  { // parse command line
     string confpath = "/etc/zprd.conf";
     for(int i = 0; i < argc; ++i) {
       const string cur = argv[i];
@@ -804,7 +812,8 @@ int main(int argc, char *argv[]) {
       if(FD_ISSET(local_fd, &rd_set)) {
         // data from tun/tap: just read it and write it to the network
         nread = cread(local_fd, buffer, BUFSIZE);
-        progress_packet(local_ip, buffer, nread);
+        if(is_ipv4_packet("local", buffer, nread))
+          progress_packet(local_ip, buffer, nread);
       }
 
       if(FD_ISSET(server_fd, &rd_set)) {
@@ -835,12 +844,9 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
-      for(auto itr = routes.begin(); itr != routes.end();) {
-        if(itr->second.del_router(it->first))
-          del_route_msg(itr->first, it->first);
-
-        ++itr;
-      }
+      for(auto &r: routes)
+        if(r.second.del_router(it->first))
+          del_route_msg(r.first, it->first);
 
       // discard remote
       it = remotes.erase(it);
