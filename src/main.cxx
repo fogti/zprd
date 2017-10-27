@@ -760,7 +760,7 @@ static void print_routing_table(int) {
     printf("\n");
   }
   printf("-- routing table:\n");
-  printf("Destination\tGateway\tSeen\tHops\n");
+  printf("Destination\tGateway\t\tSeen\tHops\n");
   for(auto &&i: routes) {
     const string dest = inet_ntoa({i.first});
     for(auto &&r: i.second._routers) {
