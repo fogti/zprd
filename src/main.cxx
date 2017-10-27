@@ -108,10 +108,9 @@ struct via_router_t {
 };
 
 // collection of via_route_t's
-class route_via_t {
+struct route_via_t {
   std::forward_list<via_router_t> _routers;
 
- public:
   // deletes all outdates routers and sort routers
   template<typename Fn>
   void cleanup(const Fn f) {
@@ -743,6 +742,36 @@ static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   return true;
 }
 
+static string format_time(const time_t x) {
+  char buffer[10];
+  const struct tm *const tmi = localtime(&x);
+  strftime(buffer, 10, "%H:%M:%S", tmi);
+  return buffer;
+}
+
+static void print_routing_table(int) {
+  printf("-- connected peers:\n");
+  printf("Peer\t\tSeen\tConfig Entry\n");
+  for(auto &&i: remotes) {
+    const string seen = format_time(i.second.seen);
+    printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
+    if(i.second.cent < 0) printf("-");
+    else printf("%ld", i.second.cent);
+    printf("\n");
+  }
+  printf("-- routing table:\n");
+  printf("Destination\tGateway\tSeen\tHops\n");
+  for(auto &&i: routes) {
+    const string dest = inet_ntoa({i.first});
+    for(auto &&r: i.second._routers) {
+      const string gateway = inet_ntoa({r.addr});
+      const string seen = format_time(r.seen);
+      printf("%s\t%s\t%s\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), static_cast<unsigned>(r.hops));
+    }
+  }
+  fflush(stdout);
+}
+
 int main(int argc, char *argv[]) {
   { // parse command line
     string confpath = "/etc/zprd.conf";
@@ -777,6 +806,7 @@ int main(int argc, char *argv[]) {
     }
 
     init_all(confpath);
+    my_signal(SIGUSR1, print_routing_table);
     fflush(stdout);
     fflush(stderr);
   }
