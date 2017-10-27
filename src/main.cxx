@@ -361,70 +361,6 @@ static string get_remote_desc(const uint32_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
-/** parse_control_message:
- * detects if a block is a control message (ICMP)
- * updates the routing table (drops outdated entries)
- *
- * TODO: doesn't work yet. We can't detect, if the router, which
- * sent the control message, is responsible for this client and
- * had provided a route to this client.
- *
- * @param src_addr  the source router
- * @param buffer    the buffer
- * @param buflen    the length of the buffer
- * @ret             discard packet?
- **/ /*
-static bool parse_control_message(const uint32_t src_addr, const char *buffer, const int buflen) {
-  {
-    constexpr const uint16_t expect_buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr);
-    if(!buffer || buflen != expect_buflen) return false;
-  }
-
-  const struct ip * const h_ip = reinterpret_cast<const struct ip*>(buffer);
-  const struct icmphdr * const h_icmp = reinterpret_cast<const struct icmphdr*>(buffer + sizeof(struct ip));
-
-  if(h_ip->ip_p != IPPROTO_ICMP) return false;
-  if(in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr))) {
-    printf("ROUTER ERROR: invalid icmp packet (wrong checksum; chksum = %u)\n", h_icmp->checksum);
-    return true;
-  }
-
-  bool discard_route = false;
-
-  switch(h_icmp->type) {
-    case ICMP_TIMXCEED:
-      if(h_icmp->code == ICMP_TIMXCEED_INTRANS)
-        discard_route = true;
-      break;
-
-    case ICMP_UNREACH:
-      switch(h_icmp->code) {
-        case ICMP_UNREACH_HOST:
-        case ICMP_UNREACH_NET:
-          discard_route = true;
-          break;
-      }
-      break;
-
-    default:
-      return false;
-  }
-
-  if(discard_route) {
-    const struct ip * const h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
-    const uint32_t router = src_addr;             // dropped from
-    const uint32_t target = h_ip2->ip_dst.s_addr; // original destination
-    if(routes[target].del_router(router)) {
-      printf("ROUTER: delete route to %s ", inet_ntoa({target}));
-      const auto d = get_remote_desc(router);
-      printf("via %s\n", d.c_str());
-    }
-  }
-
-  return false;
-}
-*/
-
 /** send_packet:
  * handles the sending of packets to a remote or local (identified by a)
  *
@@ -470,7 +406,7 @@ enum zprd_icmpe {
 };
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
-  constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr);
+  constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   char buffer[buflen];
 
   struct ip * const h_ip = reinterpret_cast<struct ip*>(buffer);
@@ -484,7 +420,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   h_ip->ip_len = htons(buflen);
   h_ip->ip_id  = rand();
   h_ip->ip_off = 0;
-  h_ip->ip_ttl = 255;
+  h_ip->ip_ttl = MAXTTL;
   h_ip->ip_p   = IPPROTO_ICMP;
 
   h_ip->ip_src = local_ip;
@@ -525,6 +461,12 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   // setup payload = orig ip header
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
 
+  // setup secondary payload = first 8 bytes of original payload
+  {
+    const size_t diff = ntohs(orig_hip->ip_len);
+    memcpy(buffer + 2 * sizeof(struct ip) + sizeof(struct icmphdr), orig_hip + sizeof(ip), (diff > 8) ? 8 : diff);
+  }
+
   // calculate ip checksum
   h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
 
@@ -553,29 +495,45 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
   // broadcast ip
   const struct in_addr brdcip = { (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr) };
-  const bool have_brdcip = have_local_ip && have_local_netmask;
+  const bool have_brdcip      = have_local_ip && have_local_netmask;
+
+  const string source_desc    = get_remote_desc(source_peer_ip);
+  const auto source_desc_c    = source_desc.c_str();
+
+  struct ip *h_ip             = reinterpret_cast<struct ip*>(buffer);
+  const uint16_t pkid         = ntohs(h_ip->ip_id);
+
+  const auto &ip_src          = h_ip->ip_src;
+  const auto &ip_dst          = h_ip->ip_dst;
+
+  const bool is_unknown_src   = is_broadcast_addr(ip_src) || (have_brdcip && brdcip == ip_src);
+  const bool is_icmp          = (h_ip->ip_p == IPPROTO_ICMP);
 
   vector<uint32_t> ret;
-  const string source_desc = get_remote_desc(source_peer_ip);
-  const char * const source_desc_c = source_desc.c_str();
 
-  struct ip *h_ip = reinterpret_cast<struct ip*>(buffer);
-  const uint16_t pkid = ntohs(h_ip->ip_id);
+  if(is_icmp && (sizeof(struct ip) + sizeof(struct icmphdr)) > buflen) {
+    printf("ROUTER: drop packet %u (too small icmp packet; size = %u) from %s\n", pkid, buflen, source_desc_c);
+    return ret;
+  }
 
-  // get packet src/dst ips
-  const struct in_addr &ip_src = h_ip->ip_src;
-  const struct in_addr &ip_dst = h_ip->ip_dst;
-
-  const bool is_unknown_src = is_broadcast_addr(ip_src) || (have_brdcip && brdcip == ip_src);
+  if(is_icmp &&
+    !([buffer, pkid, source_desc_c]() -> bool {
+      struct icmphdr * h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
+      if(in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr))) {
+        printf("ROUTER: drop packet %u (wrong icmp checksum; chksum = %u) from %s\n", pkid, h_icmp->checksum, source_desc_c);
+        return false;
+      }
+      return true;
+      })()
+    ) return ret;
 
   /* is_icmp_errmsg : flag if packet is an icmp error message
    *   reason : an echo packet could be used to establish an route without interference on application protos
    */
-  const bool is_icmp_errmsg = (h_ip->ip_p == IPPROTO_ICMP)
-    && ([buffer, buflen]() -> bool {
-      if((sizeof(struct ip) + sizeof(struct icmphdr) > buflen)) return true;
-      struct icmphdr * icmpheader = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
-      switch(icmpheader->type) {
+  const bool is_icmp_errmsg = is_icmp
+    && ([buffer]() -> bool {
+      struct icmphdr * h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
+      switch(h_icmp->type) {
         case ICMP_ECHO:      // = 8
         case ICMP_ECHOREPLY: // = 0
         case  9: // Router advert
@@ -588,9 +546,6 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       }
     })();
 
-  // am I an endpoint
-  const bool iam_ep = have_local_ip && (source_peer_ip == local_ip.s_addr || ip_dst == local_ip);
-
   if(buflen > 2000) {
     // packet is too big
     printf("ROUTER: drop packet %u (too big, size = %u) from %s\n", pkid, buflen, source_desc_c);
@@ -598,6 +553,9 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       send_icmp_msg(ZICMPM_QUENCH, h_ip, source_peer_ip);
     return ret;
   }
+
+  // am I an endpoint
+  const bool iam_ep = have_local_ip && (source_peer_ip == local_ip.s_addr || ip_dst == local_ip);
 
   // we can use the ttl directly, it is 1 byte long
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
@@ -624,7 +582,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   // update routes
   if(!is_unknown_src
-    && routes[ip_src.s_addr].add_router(source_peer_ip, 255 - (h_ip->ip_ttl)))
+    && routes[ip_src.s_addr].add_router(source_peer_ip, MAXTTL - (h_ip->ip_ttl)))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
@@ -680,16 +638,58 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       auto &route = routes[ip_dst.s_addr];
       const auto router = route.get_router();
       if(route.del_primary_router()) {
-        printf("ROUTER: delete route to %s ", inet_ntoa({ip_dst.s_addr}));
+        printf("ROUTER: delete route to %s ", inet_ntoa(ip_dst));
         const auto d = get_remote_desc(router);
         printf("via %s\n", d.c_str());
       }
     }
   } else {
-    // setup outer headers
-    set_ip_df(h_ip);
-    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+    // drop outdated routing table entries
+    if(is_icmp_errmsg && ((2 * sizeof(struct ip) + sizeof(struct icmphdr)) <= buflen)) {
+      struct icmphdr * h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
+      bool rm_route = false;
+      switch(h_icmp->type) {
+        case ICMP_TIMXCEED:
+          if(h_icmp->code == ICMP_TIMXCEED_INTRANS) rm_route = true;
+          break;
+
+        case ICMP_UNREACH:
+          switch(h_icmp->code) {
+            case ICMP_UNREACH_HOST:
+            case ICMP_UNREACH_NET:
+              rm_route = true;
+              break;
+          }
+          break;
+      }
+      if(rm_route) {
+        // drop routing table entry, if there is any
+        const struct ip * const h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
+        const uint32_t target = h_ip2->ip_dst.s_addr; // original destination
+        auto &route = routes[target];
+        if(route.empty()) {
+          // no routing table entry -> just forward
+        } else if(route.del_router(source_peer_ip)) {
+          // routing table entry dropped
+          printf("ROUTER: delete route to %s ", inet_ntoa({target}));
+          const auto d = get_remote_desc(source_peer_ip);
+          printf("via %s\n", d.c_str());
+
+          // if there is a routing table entry left -> don't forward
+          if(!route.empty()) ret.clear();
+        } else {
+          // no routing table entry dropped -> discard
+          ret.clear();
+        }
+      }
+    }
+
+    if(!ret.empty()) {
+      // setup outer headers
+      set_ip_df(h_ip);
+      if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
+        perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+    }
   }
 
   return ret;
@@ -697,17 +697,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
 static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
   remotes[sin_addr.s_addr].refresh();
-  for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len)) {
-    /*
-    bool discard = false;
-
-    if((have_local_ip && dest == local_ip.s_addr) || (dest == htonl(0)))
-      discard = parse_control_message(sin_addr.s_addr, buffer, len);
-
-    if(!discard)
-    */
-      send_packet(dest, buffer, len);
-  }
+  for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len))
+    send_packet(dest, buffer, len);
 }
 
 /** read_ip_packet
