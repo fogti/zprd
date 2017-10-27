@@ -569,9 +569,14 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
 
   // update routes
-  if(!is_unknown_src
-    && routes[ip_src.s_addr].add_router(source_peer_ip, MAXTTL - (h_ip->ip_ttl)))
-    printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
+  if(!is_unknown_src) {
+    if(have_local_ip && local_ip.s_addr == ip_src.s_addr) {
+      if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
+        printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_src));
+    } else if(routes[ip_src.s_addr].add_router(source_peer_ip, MAXTTL - h_ip->ip_ttl)) {
+      printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
+    }
+  }
 
   // is a broadcast needed
   const bool broadcast_is_dst = is_broadcast_addr(ip_dst) || (have_brdcip && brdcip == ip_dst);
@@ -751,7 +756,7 @@ static string format_time(const time_t x) {
 
 static void print_routing_table(int) {
   printf("-- connected peers:\n");
-  printf("Peer\t\tSeen\tConfig Entry\n");
+  printf("Peer\t\tSeen\t\tConfig Entry\n");
   for(auto &&i: remotes) {
     const string seen = format_time(i.second.seen);
     printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
@@ -760,7 +765,7 @@ static void print_routing_table(int) {
     printf("\n");
   }
   printf("-- routing table:\n");
-  printf("Destination\tGateway\t\tSeen\tHops\n");
+  printf("Destination\tGateway\t\tSeen\t\tHops\n");
   for(auto &&i: routes) {
     const string dest = inet_ntoa({i.first});
     for(auto &&r: i.second._routers) {
