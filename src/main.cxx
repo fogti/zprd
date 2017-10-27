@@ -516,16 +516,12 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     return ret;
   }
 
-  if(is_icmp &&
-    !([buffer, pkid, source_desc_c]() -> bool {
+  if(is_icmp && ([buffer, pkid, source_desc_c]() -> bool {
       struct icmphdr * h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
-      if(in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr))) {
-        printf("ROUTER: drop packet %u (wrong icmp checksum; chksum = %u) from %s\n", pkid, h_icmp->checksum, source_desc_c);
-        return false;
-      }
-      return true;
-      })()
-    ) return ret;
+      const bool drop = in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr));
+      if(drop) printf("ROUTER: drop packet %u (wrong icmp checksum; chksum = %u) from %s\n", pkid, h_icmp->checksum, source_desc_c);
+      return drop;
+    })()) return ret;
 
   /* is_icmp_errmsg : flag if packet is an icmp error message
    *   reason : an echo packet could be used to establish an route without interference on application protos
