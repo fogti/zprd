@@ -100,12 +100,57 @@ static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t {
   uint32_t addr;
-  time_t   seen;
+  time_t   seen, latency;
   uint8_t  hops;
 
   via_router_t(const uint32_t _addr, const uint8_t _hops)
-    : addr(_addr), seen(time(0)), hops(_hops) { }
+    : addr(_addr), seen(time(0)), latency(1), hops(_hops) { }
 };
+
+struct ping_cache_match {
+  time_t diff;
+  uint32_t dst, router;
+  bool match;
+};
+
+class ping_cache_t {
+  time_t   _seen;
+  uint32_t _src, _dst, _router;
+  uint16_t _id, _seq;
+
+ public:
+  ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0), _id(0), _seq(0) { }
+
+  void clear() {
+    _seen = 0;
+    _seq  = 0;
+  }
+
+  bool empty() const {
+    return (!_seen && !_seq);
+  }
+
+  void init(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
+    _seen   = time(0);
+    _src    = src;
+    _dst    = dst;
+    _router = router;
+    _id     = id;
+    _seq    = seq;
+  }
+
+  ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
+    if(src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
+      const ping_cache_match ret = { (time(0) - _seen) / 2, dst, router, true };
+      clear();
+      return ret;
+    } else {
+      return { 1, 0, 0, false };
+    }
+  }
+};
+
+static ping_cache_t ping_cache;
 
 // collection of via_route_t's
 struct route_via_t {
@@ -125,9 +170,14 @@ struct route_via_t {
     );
 
     _routers.sort(
+      // priority high to low: hop count > latency > seen time
       [](const via_router_t &a, const via_router_t &b) {
-        return (a.hops < b.hops)
-            || (a.hops == b.hops && a.seen > b.seen);
+        if(a.hops    < b.hops) return true;
+        if(a.hops    > b.hops) return false;
+        if(a.latency < b.latency) return true;
+        if(a.latency > b.latency) return false;
+        if(a.seen    > b.seen) return true;
+        return false;
       }
     );
   }
@@ -157,6 +207,17 @@ struct route_via_t {
       it->hops = hops;
     }
     return ret;
+  }
+
+  void update_latency(const uint32_t router, const time_t latency) {
+    const auto it_e = _routers.end();
+    const auto it = find_if(_routers.begin(), it_e,
+      [router](const via_router_t &i) noexcept {
+        return i.addr == router;
+      }
+    );
+    if(it == it_e) return;
+    it->latency = latency;
   }
 
   bool del_router(const uint32_t router) {
@@ -478,6 +539,14 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   send_packet(source_ip, buffer, buflen);
 }
 
+static void apply_ping_cache_match(const ping_cache_match &m) {
+  if(!m.match) return;
+  auto rit = routes.find(m.dst);
+  if(rit == routes.end()) return;
+  auto &route = rit->second;
+  route.update_latency(m.router, m.diff);
+}
+
 /** route_packet:
  *
  * decide which fd is the destination,
@@ -635,39 +704,55 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       }
     }
   } else {
-    // drop outdated routing table entries
-    if(is_icmp_errmsg && ((2 * sizeof(struct ip) + sizeof(struct icmphdr)) <= buflen)) {
+    if(is_icmp) {
       const auto h_icmp = reinterpret_cast<const struct icmphdr*>(buffer + sizeof(ip));
-      bool rm_route = false;
-      switch(h_icmp->type) {
-        case ICMP_TIMXCEED:
-          if(h_icmp->code == ICMP_TIMXCEED_INTRANS) rm_route = true;
-          break;
+      if(is_icmp_errmsg && ((2 * sizeof(struct ip) + sizeof(struct icmphdr)) <= buflen)) {
+        // drop outdated routing table entries
+        bool rm_route = false;
+        switch(h_icmp->type) {
+          case ICMP_TIMXCEED:
+            if(h_icmp->code == ICMP_TIMXCEED_INTRANS) rm_route = true;
+            break;
 
-        case ICMP_UNREACH:
-          switch(h_icmp->code) {
-            case ICMP_UNREACH_HOST:
-            case ICMP_UNREACH_NET:
-              rm_route = true;
-              break;
+          case ICMP_UNREACH:
+            switch(h_icmp->code) {
+              case ICMP_UNREACH_HOST:
+              case ICMP_UNREACH_NET:
+                rm_route = true;
+                break;
+            }
+            break;
+        }
+        if(rm_route) {
+          // drop routing table entry, if there is any
+          const auto h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
+          const auto target = h_ip2->ip_dst; // original destination
+          const auto rit = routes.find(target.s_addr);
+          if(rit != routes.end() && !rit->second.empty()) {
+            auto &route = rit->second;
+            if(route.del_router(source_peer_ip)) {
+              // routing table entry dropped
+              printf("ROUTER: delete route to %s ", inet_ntoa(target));
+              const auto d = get_remote_desc(source_peer_ip);
+              printf("via %s\n", d.c_str());
+            }
+            // if there is a routing table entry left -> discard
+            if(!route.empty()) ret.clear();
           }
-          break;
-      }
-      if(rm_route) {
-        // drop routing table entry, if there is any
-        const auto h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
-        const auto target = h_ip2->ip_dst; // original destination
-        const auto rit = routes.find(target.s_addr);
-        if(rit != routes.end() && !rit->second.empty()) {
-          auto &route = rit->second;
-          if(route.del_router(source_peer_ip)) {
-            // routing table entry dropped
-            printf("ROUTER: delete route to %s ", inet_ntoa(target));
-            const auto d = get_remote_desc(source_peer_ip);
-            printf("via %s\n", d.c_str());
-          }
-          // if there is a routing table entry left -> discard
-          if(!route.empty()) ret.clear();
+        }
+      } else if(!is_unknown_src && !is_broadcast) {
+        /** evaluate ping packets to determine the latency of this route
+         *  echoreply : source and destination are swapped
+         **/
+        const auto &echo = h_icmp->un.echo;
+        switch(h_icmp->type) {
+          case ICMP_ECHO:
+            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, ret.front(), echo.id, echo.sequence);
+            break;
+
+          case ICMP_ECHOREPLY:
+            apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence));
+            break;
         }
       }
     }
@@ -765,13 +850,13 @@ static void print_routing_table(int) {
     printf("\n");
   }
   printf("-- routing table:\n");
-  printf("Destination\tGateway\t\tSeen\t\tHops\n");
+  printf("Destination\tGateway\t\tSeen\t\tLatency\tHops\n");
   for(auto &&i: routes) {
     const string dest = inet_ntoa({i.first});
     for(auto &&r: i.second._routers) {
       const string gateway = inet_ntoa({r.addr});
       const string seen = format_time(r.seen);
-      printf("%s\t%s\t%s\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), static_cast<unsigned>(r.hops));
+      printf("%s\t%s\t%s\t%ld\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
   fflush(stdout);
