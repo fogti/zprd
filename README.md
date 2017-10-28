@@ -23,7 +23,7 @@ with firewalls, NATs and VPNs.
 
    - protocol stacking: ```ethernet > ipv4 > udp > ipv4 > payload```
 
-## Setup
+## Manual Setup
 
  - compile zprd / installation
 
@@ -50,6 +50,28 @@ with firewalls, NATs and VPNs.
 
  - start zprd (this is usually done by the daemontools)
 
+```./zprd```
+
+## Setup using daemontools on Gentoo
+
+ - fetch the portage overlay
+
 ```
-  ./zprd
+  cd /usr
+  git clone https://github.com/zserik/portage-zscheile
 ```
+
+ - emerge the package with: ```emerge -av =net-misc/zprd-9999```
+
+ - setup /etc/zprd.conf (content; initial)
+
+```
+  Itun3
+  A192.168.0.1/24
+```
+
+ - enable the service with: ```ln -s -t /service /etc/zprd```
+
+ - enable svscan with: ```rc-update add svscan```
+
+ - start svscan with: ```/etc/init.d/svscan restart```
