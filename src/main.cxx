@@ -141,7 +141,7 @@ class ping_cache_t {
 
   ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
     if(src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
-      const ping_cache_match ret = { (time(0) - _seen) / 2, dst, router, true };
+      const ping_cache_match ret = { time(0) - _seen, dst, router, true };
       clear();
       return ret;
     } else {
