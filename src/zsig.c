@@ -8,7 +8,5 @@ void my_signal(const int sig_nr, const sighandler_t sig_handler) {
   newsig.sa_handler = sig_handler;
   newsig.sa_flags   = SA_RESTART;
   sigemptyset(&newsig.sa_mask);
-
-  struct sigaction oldsig;
-  sigaction(sig_nr, &newsig, &oldsig);
+  sigaction(sig_nr, &newsig, 0);
 }

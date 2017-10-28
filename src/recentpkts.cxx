@@ -10,18 +10,21 @@
 static std::unordered_map<uint64_t, uint8_t> _pkts;
 
 bool RecentPkts_append(const uint64_t id) {
-  // drop expired pkts + aging
+  bool ret = false;
+
+  // drop expired pkts + aging + found?
   for(auto it = _pkts.begin(); it != _pkts.end(); ) {
     if(!it->second) {
       it = _pkts.erase(it);
-    } else {
-      --(it->second);
-      ++it;
+      continue;
     }
-  }
 
-  // packet found
-  const bool ret = (_pkts.count(id) == 1);
+    // packet found ?
+    ret = ret || (it->first == id);
+
+    --(it->second);
+    ++it;
+  }
 
   // append if unknown + reset ttl
   _pkts[id] = 32;

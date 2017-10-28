@@ -868,7 +868,7 @@ int main(int argc, char *argv[]) {
 
     set<size_t> found_remotes;
 
-    for(auto it = remotes.begin(); it != remotes.end();) {
+    for(auto it = remotes.cbegin(); it != remotes.cend();) {
       // skip local, and remotes which aren't timed out
       if(it->first == local_ip.s_addr || !it->second.outdated()) {
         // update found remotes list

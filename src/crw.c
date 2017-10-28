@@ -31,9 +31,10 @@
 
 int tun_alloc(char *dev, const int flags) {
   struct ifreq ifr;
-  int fd, err;
+  int err;
 
-  if( (fd = open("/dev/net/tun", O_RDWR)) < 0 ) {
+  const int fd = open("/dev/net/tun", O_RDWR);
+  if(fd < 0) {
     perror("Opening /dev/net/tun");
     return fd;
   }
@@ -75,9 +76,7 @@ int cwrite(const int fd, const char *buf, const int n) {
 }
 
 int read_n(const int fd, char *buf, const int n) {
-  int left = n;
-
-  while(left > 0) {
+  for(int left = n; left > 0;) {
     const int nread = cread(fd, buf, left);
     if(!nread) return 0;
     left -= nread;

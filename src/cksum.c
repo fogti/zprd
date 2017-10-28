@@ -9,15 +9,11 @@
 uint16_t in_cksum(const uint16_t *ptr, int nbytes) {
   register long sum = 0;
 
-  for(; nbytes > 1; nbytes -= 2) {
-    sum += *ptr;
-    ++ptr;
-  }
+  for(; nbytes > 1; nbytes -= 2)
+    sum += *(ptr++);
 
-  if(nbytes == 1) {
-    const uint8_t oddbyte = * ((const uint8_t *) ptr);
-    sum += oddbyte;
-  }
+  if(nbytes)
+    sum += * ((const uint8_t *) ptr);
 
   while(sum >> 16)
     sum = (sum >> 16) + (sum & 0xffff);
