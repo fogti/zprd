@@ -751,7 +751,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
             break;
 
           case ICMP_ECHOREPLY:
-            apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence));
+            if(!ping_cache.empty())
+              apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence));
             break;
         }
       }
