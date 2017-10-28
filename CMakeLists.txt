@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.1.0)
 project(zprd)
 
 set(INSTALL_BIN_DIR bin CACHE PATH "Installation directory for binaries")
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
