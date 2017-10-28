@@ -822,11 +822,18 @@ static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
 
   if(!is_ipv4_packet(source_desc_c, buffer, nread)) return false;
 
+  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
+
   // get total length
-  len = ntohs(reinterpret_cast<const struct ip*>(buffer)->ip_len);
+  len = ntohs(h_ip->ip_len);
 
   if(nread < len) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u) from %s\n", nread, source_desc_c);
+    return false;
+  }
+
+  if(have_local_ip && h_ip->ip_src == local_ip) {
+    printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
     return false;
   }
 
