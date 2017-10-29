@@ -848,17 +848,20 @@ static string format_time(const time_t x) {
 }
 
 static void print_routing_table(int) {
-  printf("-- connected peers:\n");
-  printf("Peer\t\tSeen\t\tConfig Entry\n");
-  for(auto &&i: remotes) {
-    const string seen = format_time(i.second.seen);
-    printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
-    if(i.second.cent < 0) printf("-");
-    else printf("%ld", i.second.cent);
-    printf("\n");
+  puts("-- connected peers:");
+  puts("Peer\t\tSeen\t\tConfig Entry");
+  {
+    for(auto &&i: remotes) {
+      const string seen = format_time(i.second.seen);
+      printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
+      if(i.second.cent < 0) printf("-");
+      else if(i.second.cent >= zprd_conf.remotes.size()) printf("####");
+      else printf("%s", zprd_conf.remotes[i.second.cent].c_str());
+      puts("");
+    }
   }
-  printf("-- routing table:\n");
-  printf("Destination\tGateway\t\tSeen\t\tLatency\tHops\n");
+  puts("-- routing table:");
+  puts("Destination\tGateway\t\tSeen\t\tLatency\tHops");
   for(auto &&i: routes) {
     const string dest = inet_ntoa({i.first});
     for(auto &&r: i.second._routers) {
