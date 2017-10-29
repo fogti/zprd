@@ -8,10 +8,11 @@ LINE FORMAT:
 
 CMDs:
   #  comment
+  A  ip address (not used by daemon but by runner)
   I  interface
   R  remote
-  A  ip address (not used by daemon but by runner)
-  U  user (not used by daemon but by runner)
+  T  remote timeout (re-resolve remote)
+  U  drop privs to. user
 
 EXAMPLE:
   @ see doc/files/zprd.conf

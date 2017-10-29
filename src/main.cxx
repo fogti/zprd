@@ -62,9 +62,6 @@
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 65536
 
-// timeout in seconds after which remotes are silently discarded
-#define REMOTE_TIMEOUT 900 // 0.25 hour
-
 using namespace std;
 
 /** file descriptors
@@ -74,8 +71,11 @@ using namespace std;
  **/
 static int local_fd, server_fd;
 
-/** data port **/
+// data port
 static uint16_t data_port;
+
+// timeout in seconds after which remotes are silently discarded
+static time_t remote_timeout;
 
 struct remote_peer_t {
   time_t  seen;
@@ -92,7 +92,7 @@ struct remote_peer_t {
   }
 
   bool outdated() const {
-    return (time(0) - seen) >= REMOTE_TIMEOUT;
+    return (time(0) - seen) >= remote_timeout;
   }
 };
 
@@ -169,7 +169,7 @@ struct route_via_t {
   void cleanup(const Fn f) {
     _routers.remove_if(
       [f](const via_router_t &a) {
-        if((time(0) - a.seen) < (2 * REMOTE_TIMEOUT))
+        if((time(0) - a.seen) < (2 * remote_timeout))
           return false;
 
         f(a.addr);
@@ -282,10 +282,9 @@ static void init_all(const string &confpath) {
       exit(1);
     }
 
-    /** DEFAULTS
-     *  (data_port) P45940
-     **/
-    data_port = 45940;
+    // DEFAULTS
+    data_port      = 45940; // P45940
+    remote_timeout = 900;   // T900
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
@@ -293,28 +292,30 @@ static void init_all(const string &confpath) {
     string line;
     while(getline(in, line)) {
       if(line.empty()) continue;
+      const string arg = line.substr(1);
       switch(line.front()) {
         case '#':
-          break;
-
         case 'A':
-          // used and applied by startup script
           break;
 
         case 'I':
-          zprd_conf.iface = line.substr(1);
+          zprd_conf.iface = arg;
           break;
 
         case 'P':
-          data_port = stoi(line.substr(1));
+          data_port = stoi(arg);
           break;
 
         case 'R':
-          zprd_conf.remotes.emplace_back(line.substr(1));
+          zprd_conf.remotes.emplace_back(arg);
+          break;
+
+        case 'T':
+          remote_timeout = stoi(arg);
           break;
 
         case 'U':
-          run_as_user = line.substr(1);
+          run_as_user = arg;
           break;
 
         default:
@@ -358,13 +359,13 @@ static void init_all(const string &confpath) {
     }
     zprd_conf.iface = if_name;
 
-    printf("connected to interface %s\n", zprd_conf.iface.c_str());
+    printf("connected to interface %s\n", if_name);
   }
 
   {
-    struct in_addr remote;
     size_t i = 0;
     for(auto &&r : zprd_conf.remotes) {
+      struct in_addr remote;
       if(resolve_hostname(r.c_str(), remote)) {
         remotes[remote.s_addr] = remote_peer_t(i);
         printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
@@ -374,7 +375,7 @@ static void init_all(const string &confpath) {
   }
 
   if(remotes.empty() && !zprd_conf.remotes.empty()) {
-    printf("CLIENT ERROR: can't connect to any server. QUIT\n");
+    puts("CLIENT ERROR: can't connect to any server. QUIT");
     exit(1);
   }
 
@@ -438,7 +439,7 @@ static string get_remote_desc(const uint32_t addr) {
  * @ret           written bytes count
  **/
 static int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
-  if((have_local_ip && ent == local_ip.s_addr) || (ent == htonl(0)))
+  if((have_local_ip && ent == local_ip.s_addr) || ent == htonl(0))
     return cwrite(local_fd, buffer, buflen);
 
   struct sockaddr_in dsta;
@@ -475,12 +476,10 @@ enum zprd_icmpe {
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
   constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  char buffer[buflen];
+  char buffer[buflen] = { 0 };
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
-
-  memset(buffer, 0, buflen);
 
   h_ip->ip_v   = 4;
   h_ip->ip_hl  = 5;
@@ -549,7 +548,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 
 static void apply_ping_cache_match(const ping_cache_match &m) {
   if(!m.match) return;
-  auto rit = routes.find(m.dst);
+  const auto rit = routes.find(m.dst);
   if(rit == routes.end()) return;
   auto &route = rit->second;
   route.update_latency(m.router, m.diff);
@@ -569,27 +568,15 @@ static void apply_ping_cache_match(const ping_cache_match &m) {
  * @ret             the ips of the destination sockets
  **/
 static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
-  // broadcast ip
-  const struct in_addr brdcip = { (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr) };
-  const bool have_brdcip      = have_local_ip && have_local_netmask;
-
-  const string source_desc    = get_remote_desc(source_peer_ip);
-  const auto source_desc_c    = source_desc.c_str();
-
-  const auto h_ip             = reinterpret_cast<struct ip*>(buffer);
-  const uint16_t pkid         = ntohs(h_ip->ip_id);
-
-  const auto &ip_src          = h_ip->ip_src;
-  const auto &ip_dst          = h_ip->ip_dst;
-
-  const bool is_unknown_src   = is_broadcast_addr(ip_src) || (have_brdcip && brdcip == ip_src);
-  const bool is_icmp          = (h_ip->ip_p == IPPROTO_ICMP);
-
-  vector<uint32_t> ret;
+  const string source_desc = get_remote_desc(source_peer_ip);
+  const auto source_desc_c = source_desc.c_str();
+  const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
+  const uint16_t pkid      = ntohs(h_ip->ip_id);
+  const bool is_icmp       = (h_ip->ip_p == IPPROTO_ICMP);
 
   if(is_icmp && (sizeof(struct ip) + sizeof(struct icmphdr)) > buflen) {
     printf("ROUTER: drop packet %u (too small icmp packet; size = %u) from %s\n", pkid, buflen, source_desc_c);
-    return ret;
+    return {};
   }
 
   /* is_icmp_errmsg : flag if packet is an icmp error message
@@ -611,12 +598,20 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       }
     })();
 
+  // broadcast ip
+  const struct in_addr brdcip = { (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr) };
+  const bool have_brdcip      = have_local_ip && have_local_netmask;
+
+  const auto &ip_src          = h_ip->ip_src;
+  const auto &ip_dst          = h_ip->ip_dst;
+
+  const bool is_unknown_src   = is_broadcast_addr(ip_src) || (have_brdcip && brdcip == ip_src);
+
   if(buflen > 2000) {
-    // packet is too big
     printf("ROUTER: drop packet %u (too big, size = %u) from %s\n", pkid, buflen, source_desc_c);
     if(!is_unknown_src && !is_icmp_errmsg)
       send_icmp_msg(ZICMPM_QUENCH, h_ip, source_peer_ip);
-    return ret;
+    return {};
   }
 
   // am I an endpoint
@@ -628,14 +623,14 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
     if(!is_unknown_src && !is_icmp_errmsg)
       send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
-    return ret;
+    return {};
   }
 
   // check this late (don't register discarded packets)
   // use case : two ways to one destination, merge at destination (or before)
   if(RecentPkts_append(in_hashsum(reinterpret_cast<const uint8_t*>(buffer), buflen))) {
     printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
-    return ret;
+    return {};
   }
 
   // decrement ttl
@@ -672,6 +667,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   }
 
   // get route to destination
+  vector<uint32_t> ret;
+
   if(is_broadcast) {
     for(auto &&i : remotes)
       ret.emplace_back(i.first);
@@ -862,7 +859,7 @@ static void print_routing_table(int) {
     for(auto &&i: remotes) {
       const string seen = format_time(i.second.seen);
       printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
-      if(i.second.cent < 0) printf("-");
+      if(i.second.cent < 0) putchar('-');
       else if(i.second.cent >= zprd_conf.remotes.size()) printf("####");
       else printf("%s", zprd_conf.remotes[i.second.cent].c_str());
       puts("");
@@ -941,7 +938,7 @@ int main(int argc, char *argv[]) {
       }
 
       if(have_local_ip && !have_local_netmask) {
-        printf("ROUTER ERROR: got local ip but no local netmask ip\n");
+        puts("ROUTER ERROR: got local ip but no local netmask ip");
         exit(1);
       }
 
