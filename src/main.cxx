@@ -100,23 +100,31 @@ static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t {
   uint32_t addr;
-  time_t   seen, latency;
+  time_t   seen;
+  uint64_t latency;
   uint8_t  hops;
 
   via_router_t(const uint32_t _addr, const uint8_t _hops)
-    : addr(_addr), seen(time(0)), latency(1), hops(_hops) { }
+    : addr(_addr), seen(time(0)), latency(0), hops(_hops) { }
 };
 
 struct ping_cache_match {
-  time_t diff;
+  uint64_t diff;
   uint32_t dst, router;
   bool match;
 };
 
+// TODO: handle failure of clock_gettime
 class ping_cache_t {
-  time_t   _seen;
+  uint64_t _seen;
   uint32_t _src, _dst, _router;
   uint16_t _id, _seq;
+
+  static uint64_t get_ms_time() {
+    struct timespec curt;
+    clock_gettime(CLOCK_MONOTONIC, &curt);
+    return curt.tv_sec * 1000 + curt.tv_nsec / 1.0e6;
+  }
 
  public:
   ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0), _id(0), _seq(0) { }
@@ -131,7 +139,7 @@ class ping_cache_t {
   }
 
   void init(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
-    _seen   = time(0);
+    _seen   = get_ms_time();
     _src    = src;
     _dst    = dst;
     _router = router;
@@ -141,7 +149,7 @@ class ping_cache_t {
 
   ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
     if(src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
-      const ping_cache_match ret = { time(0) - _seen, dst, router, true };
+      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, true };
       clear();
       return ret;
     } else {
@@ -209,7 +217,7 @@ struct route_via_t {
     return ret;
   }
 
-  void update_latency(const uint32_t router, const time_t latency) {
+  void update_latency(const uint32_t router, const uint64_t latency) {
     const auto it_e = _routers.end();
     const auto it = find_if(_routers.begin(), it_e,
       [router](const via_router_t &i) noexcept {
