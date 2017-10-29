@@ -101,7 +101,7 @@ static unordered_map<uint32_t, remote_peer_t> remotes;
 struct via_router_t {
   uint32_t addr;
   time_t   seen;
-  uint64_t latency;
+  double   latency;
   uint8_t  hops;
 
   via_router_t(const uint32_t _addr, const uint8_t _hops)
@@ -109,21 +109,23 @@ struct via_router_t {
 };
 
 struct ping_cache_match {
-  uint64_t diff;
+  double diff;
   uint32_t dst, router;
   bool match;
 };
 
 // TODO: handle failure of clock_gettime
 class ping_cache_t {
-  uint64_t _seen;
+  double _seen;
   uint32_t _src, _dst, _router;
   uint16_t _id, _seq;
 
-  static uint64_t get_ms_time() {
+  static double get_ms_time() {
     struct timespec curt;
     clock_gettime(CLOCK_MONOTONIC, &curt);
-    return curt.tv_sec * 1000 + curt.tv_nsec / 1.0e6;
+    const double rms = curt.tv_sec * 1000 + curt.tv_nsec / 1.0e6;
+    printf("ROUTER DEBUG: got timestamp of ping: %f\n", rms);
+    return rms;
   }
 
  public:
@@ -875,7 +877,7 @@ static void print_routing_table(int) {
     for(auto &&r: i.second._routers) {
       const string gateway = inet_ntoa({r.addr});
       const string seen = format_time(r.seen);
-      printf("%s\t%s\t%s\t%lu\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
+      printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
   fflush(stdout);
