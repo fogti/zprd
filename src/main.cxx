@@ -217,7 +217,7 @@ struct route_via_t {
     return ret;
   }
 
-  void update_latency(const uint32_t router, const uint64_t latency) {
+  void update_latency(const uint32_t router, const double latency) {
     const auto it_e = _routers.end();
     const auto it = find_if(_routers.begin(), it_e,
       [router](const via_router_t &i) noexcept {
