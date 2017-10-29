@@ -875,7 +875,7 @@ static void print_routing_table(int) {
     for(auto &&r: i.second._routers) {
       const string gateway = inet_ntoa({r.addr});
       const string seen = format_time(r.seen);
-      printf("%s\t%s\t%s\t%ld\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
+      printf("%s\t%s\t%s\t%lu\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
   fflush(stdout);
