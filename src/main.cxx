@@ -123,9 +123,7 @@ class ping_cache_t {
   static double get_ms_time() {
     struct timespec curt;
     clock_gettime(CLOCK_MONOTONIC, &curt);
-    const double rms = curt.tv_sec * 1000 + curt.tv_nsec / 1.0e6;
-    printf("ROUTER DEBUG: got timestamp of ping: %f\n", rms);
-    return rms;
+    return curt.tv_sec * 1000 + curt.tv_nsec / 1000000.0;
   }
 
  public:
