@@ -3,14 +3,14 @@
 ## USAGE
 
 ZPRD is a simple, unencrypted IPv4 tunnel tool,
-which can be server and client.
+which is a server and can be a client.
 
 The ZPRD was created to tunnel through complex routing setups
 with firewalls, NATs and VPNs.
 
 ## NOTES
 
- - The ZPRD ONLY establishes peer connections at startup.
+ - The ZPRD establishes peer connections at startup.
 
  - The ZPRD manages incomming connections.
 
@@ -18,8 +18,7 @@ with firewalls, NATs and VPNs.
    to have very less overhead. It is intended to be used
    in combination with VPN software.
 
- - The ZPRD tunnels IPv4 packets (and **ONLY IPv4** packets)
-   over UDP and IPv4.
+ - The ZPRD ONLY tunnels IPv4 packets over UDP and IPv4.
 
    - protocol stacking: ```ethernet > ipv4 > udp > ipv4 > payload```
 
@@ -34,9 +33,7 @@ with firewalls, NATs and VPNs.
 
  - setup /etc/zprd.conf (content; initial)
 
-```
-  Itun3
-```
+```  Itun3```
 
  - setup interface (this is usually done by the daemontools)
 
@@ -50,7 +47,7 @@ with firewalls, NATs and VPNs.
 
  - start zprd (this is usually done by the daemontools)
 
-```./zprd```
+```  ./zprd```
 
 ## Setup using daemontools on Gentoo
 
