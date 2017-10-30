@@ -722,7 +722,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       if(route.del_primary_router()) {
         printf("ROUTER: delete route to %s ", inet_ntoa(ip_dst));
         const auto d = get_remote_desc(router);
-        printf("via %s\n", d.c_str());
+        printf("via %s (invalid)\n", d.c_str());
       }
     }
   } else {
@@ -756,7 +756,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
               // routing table entry dropped
               printf("ROUTER: delete route to %s ", inet_ntoa(target));
               const auto d = get_remote_desc(source_peer_ip);
-              printf("via %s\n", d.c_str());
+              printf("via %s (unreachable)\n", d.c_str());
             }
             // if there is a routing table entry left -> discard
             if(!route.empty()) ret.clear();
@@ -970,7 +970,7 @@ int main(int argc, char *argv[]) {
       // discard route
       printf("ROUTER: delete route to %s ", inet_ntoa({addr}));
       const auto d = get_remote_desc(router);
-      printf("via %s\n", d.c_str());
+      printf("via %s (outdated)\n", d.c_str());
     };
 
     set<size_t> found_remotes;
