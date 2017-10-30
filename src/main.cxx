@@ -108,6 +108,7 @@ struct via_router_t {
 struct ping_cache_match {
   double diff;
   uint32_t dst, router;
+  uint8_t hops;
   bool match;
 };
 
@@ -116,6 +117,7 @@ class ping_cache_t {
   double _seen;
   uint32_t _src, _dst, _router;
   uint16_t _id, _seq;
+  uint8_t  _ttl;
 
   static double get_ms_time() {
     struct timespec curt;
@@ -124,7 +126,7 @@ class ping_cache_t {
   }
 
  public:
-  ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0), _id(0), _seq(0) { }
+  ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0), _id(0), _seq(0), _ttl(0) { }
 
   void clear() {
     _seen = 0;
@@ -135,22 +137,23 @@ class ping_cache_t {
     return (!_seen && !_seq);
   }
 
-  void init(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
+  void init(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq, const uint8_t ttl) {
     _seen   = get_ms_time();
     _src    = src;
     _dst    = dst;
     _router = router;
     _id     = id;
     _seq    = seq;
+    _ttl    = ttl;
   }
 
-  ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq) {
+  ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq, const uint8_t ttl) {
     if(src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
-      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, true };
+      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, _ttl - ttl + 1, true };
       clear();
       return ret;
     } else {
-      return { 1, 0, 0, false };
+      return { 1, 0, 0, 255, false };
     }
   }
 };
@@ -214,7 +217,7 @@ struct route_via_t {
     return ret;
   }
 
-  void update_latency(const uint32_t router, const double latency) {
+  void update_router(const uint32_t router, const uint8_t hops, const double latency) {
     const auto it_e = _routers.end();
     const auto it = find_if(_routers.begin(), it_e,
       [router](const via_router_t &i) noexcept {
@@ -222,6 +225,8 @@ struct route_via_t {
       }
     );
     if(it == it_e) return;
+    it->seen = time(0);
+    it->hops = hops;
     it->latency = latency;
   }
 
@@ -599,8 +604,7 @@ static void apply_ping_cache_match(const ping_cache_match &m) {
   if(!m.match) return;
   const auto rit = routes.find(m.dst);
   if(rit == routes.end()) return;
-  auto &route = rit->second;
-  route.update_latency(m.router, m.diff);
+  rit->second.update_router(m.router, m.hops, m.diff);
 }
 
 /** route_packet:
@@ -806,12 +810,12 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
         const auto &echo = h_icmp->un.echo;
         switch(h_icmp->type) {
           case ICMP_ECHO:
-            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, ret.front(), echo.id, echo.sequence);
+            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, ret.front(), echo.id, echo.sequence, h_ip->ip_ttl);
             break;
 
           case ICMP_ECHOREPLY:
             if(!ping_cache.empty())
-              apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence));
+              apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence, h_ip->ip_ttl));
             break;
         }
       }

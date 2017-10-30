@@ -1,4 +1,4 @@
-# doc
+# docs
 
 This folder contains additional documentation and examples for the ZPRD.
 
