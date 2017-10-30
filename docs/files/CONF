@@ -10,6 +10,7 @@ CMDs:
   #  comment
   A  ip address
   I  interface
+  L  local route address
   R  remote
   T  remote timeout (re-resolve remote)
   U  drop privs to. user

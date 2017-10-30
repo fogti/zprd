@@ -250,9 +250,19 @@ static routes_t routes;
 static in_addr local_ip, local_netmask;
 static bool have_local_ip;
 
+struct local_route {
+  uint32_t dst;
+  uint32_t nmk;
+
+  bool match(const uint32_t a) const noexcept {
+    return (dst & nmk) == (a & nmk);
+  }
+};
+
 struct {
   string iface;
   vector<string> remotes;
+  vector<local_route> locals;
 } zprd_conf;
 
 static void init_all(const string &confpath) {
@@ -313,6 +323,27 @@ static void init_all(const string &confpath) {
           zprd_conf.iface = arg;
           break;
 
+        case 'L':
+          {
+            const size_t marker = arg.find('/');
+            const string ip = arg.substr(0, marker);
+            string cidrsf = "32";
+            if(marker != string::npos)
+              cidrsf = arg.substr(marker + 1);
+
+            local_route tmp;
+            tmp.nmk = cidr_to_netmask(stoi(cidrsf));
+
+            struct in_addr lrdst;
+            if(!resolve_hostname(ip.c_str(), lrdst))
+              fprintf(stderr, "CONFIG WARNING: invalid 'L' statement: '%s'\n", line.c_str());
+            else {
+              tmp.dst = lrdst.s_addr;
+              zprd_conf.locals.emplace_back(tmp);
+            }
+          }
+          break;
+
         case 'P':
           data_port = stoi(arg);
           break;
@@ -349,7 +380,7 @@ static void init_all(const string &confpath) {
         cidrsf = addr_stmt.substr(marker + 1);
 
       if(!resolve_hostname(ip.c_str(), local_ip)) {
-        fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: '%s'\n", line.c_str());
+        fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: 'A%s'\n", addr_stmt.c_str());
         exit(1);
       }
 
@@ -696,10 +727,20 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     auto it_e = ret.end();
     ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
 
-    if(!broadcast_is_dst && netmask_match && ip_dst != local_ip) {
+    if(!broadcast_is_dst && netmask_match && ip_dst != local_ip && source_peer_ip != local_ip.s_addr) {
+      // handle the case when one of my local routes is the destination
+      bool rm_local = true;
+      for(auto &&i : zprd_conf.locals)
+        if(i.match(ip_dst.s_addr)) {
+          rm_local = false;
+          break;
+        }
+
       // catch bouncing packets in *local iface* network earlier
-      it_e = ret.end();
-      ret.erase(std::remove(ret.begin(), it_e, local_ip.s_addr), it_e);
+      if(rm_local) {
+        it_e = ret.end();
+        ret.erase(std::remove(ret.begin(), it_e, local_ip.s_addr), it_e);
+      }
     }
   }
 
