@@ -8,7 +8,7 @@ LINE FORMAT:
 
 CMDs:
   #  comment
-  A  ip address (not used by daemon but by runner)
+  A  ip address
   I  interface
   R  remote
   T  remote timeout (re-resolve remote)

@@ -251,7 +251,7 @@ typedef unordered_map<uint32_t, route_via_t> routes_t;
 static routes_t routes;
 
 static in_addr local_ip, local_netmask;
-static bool have_local_ip, have_local_netmask;
+static bool have_local_ip;
 
 struct {
   string iface;
@@ -285,6 +285,7 @@ static void init_all(const string &confpath) {
     // DEFAULTS
     data_port      = 45940; // P45940
     remote_timeout = 900;   // T900
+    have_local_ip  = false;
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
@@ -295,7 +296,25 @@ static void init_all(const string &confpath) {
       const string arg = line.substr(1);
       switch(line.front()) {
         case '#':
+          break;
+
         case 'A':
+          {
+            const size_t marker = arg.find('/');
+            const string ip = arg.substr(0, marker);
+            printf("CONFIG DEBUG: got local ip = %s\n", ip.c_str());
+            string cidrsf = "32";
+            if(marker != string::npos)
+              cidrsf = arg.substr(marker + 1);
+
+            if(!resolve_hostname(ip.c_str(), local_ip)) {
+              fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: '%s'\n", line.c_str());
+              exit(1);
+            }
+
+            local_netmask.s_addr = cidr_to_netmask(stoi(cidrsf));
+            printf("CONFIG DEBUG: got local netmask = %s\n", inet_ntoa(local_netmask));
+          }
           break;
 
         case 'I':
@@ -600,7 +619,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   // broadcast ip
   const struct in_addr brdcip = { (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr) };
-  const bool have_brdcip      = have_local_ip && have_local_netmask;
+  const bool have_brdcip      = have_local_ip;
 
   const auto &ip_src          = h_ip->ip_src;
   const auto &ip_dst          = h_ip->ip_dst;
@@ -677,7 +696,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     ret.emplace_back(routes[ip_dst.s_addr].get_router());
   }
 
-  const bool netmask_match = have_local_netmask && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr);
+  const bool netmask_match = have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr);
 
   { // split horizon
     auto it_e = ret.end();
@@ -917,6 +936,17 @@ int main(int argc, char *argv[]) {
     fflush(stderr);
   }
 
+  {
+    struct ifreq ifr;
+    have_local_ip      = get_local_xxxip_generic(local_ip,      ifr, SIOCGIFADDR,    ifr.ifr_addr);
+    bool have_local_netmask = get_local_xxxip_generic(local_netmask, ifr, SIOCGIFNETMASK, ifr.ifr_netmask);
+
+    if(have_local_ip && !have_local_netmask) {
+      puts("ROUTER ERROR: got local ip but no local netmask ip");
+      exit(1);
+    }
+  }
+
   while(1) {
     { // use select() to handle two descriptors at once
       fd_set rd_set;
@@ -928,17 +958,6 @@ int main(int argc, char *argv[]) {
       if(select(maxfd + 1, &rd_set, 0, 0, 0) < 0) {
         if(errno == EINTR) continue;
         perror("select()");
-        exit(1);
-      }
-
-      { // get local ip + netmask after select to get up-to-date results
-        struct ifreq ifr;
-        have_local_ip      = get_local_xxxip_generic(local_ip,      ifr, SIOCGIFADDR,    ifr.ifr_addr);
-        have_local_netmask = get_local_xxxip_generic(local_netmask, ifr, SIOCGIFNETMASK, ifr.ifr_netmask);
-      }
-
-      if(have_local_ip && !have_local_netmask) {
-        puts("ROUTER ERROR: got local ip but no local netmask ip");
         exit(1);
       }
 

@@ -7,4 +7,6 @@ bool operator!=(const in_addr &a, const in_addr &b) noexcept;
 
 // is_broadcast_addr: checks if the given addr is a broadcast address
 bool is_broadcast_addr(const struct in_addr &a) noexcept;
+
+uint32_t cidr_to_netmask(const uint8_t suffix) noexcept;
 #endif
