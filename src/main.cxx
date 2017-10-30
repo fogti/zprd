@@ -353,6 +353,7 @@ static void init_all(const string &confpath) {
         exit(1);
       }
 
+      have_local_ip = true;
       local_netmask.s_addr = cidr_to_netmask(stoi(cidrsf));
 
       runcmd("ip addr flush '" + zprd_conf.iface + "'");
