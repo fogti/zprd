@@ -20,5 +20,5 @@ bool is_broadcast_addr(const struct in_addr &a) noexcept {
 }
 
 uint32_t cidr_to_netmask(const uint8_t suffix) noexcept {
-  return ~(0xffffffff >> suffix);
+  return htonl(~(0xffffffff >> suffix));
 }
