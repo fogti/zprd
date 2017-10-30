@@ -658,25 +658,20 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
 
   // update routes
-  if(!is_unknown_src) {
-    if(have_local_ip && local_ip.s_addr == ip_src.s_addr) {
-      if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
-        printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_src));
-    } else if(routes[ip_src.s_addr].add_router(source_peer_ip, MAXTTL - h_ip->ip_ttl)) {
-      printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
-    }
-  }
+  if(!is_unknown_src && routes[ip_src.s_addr].add_router(
+      source_peer_ip,
+      (have_local_ip && local_ip.s_addr == ip_src.s_addr) ? 0 : (MAXTTL - h_ip->ip_ttl)
+  ))
+    printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
   const bool broadcast_is_dst = is_broadcast_addr(ip_dst) || (have_brdcip && brdcip == ip_dst);
   bool is_broadcast = broadcast_is_dst;
 
   if(!is_broadcast) {
-    if(have_local_ip
-      && ip_dst == local_ip
-      && routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
-    {
-      printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
+    if(have_local_ip && ip_dst == local_ip) {
+      if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
+        printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
     } else if(routes.find(ip_dst.s_addr) == routes.end()) {
       printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
       is_broadcast = true;
