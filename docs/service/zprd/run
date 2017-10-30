@@ -10,23 +10,20 @@ if ! [ -f "$ZPRD_CONF" ]; then
 fi
 
 IFACE="$(grep '^I' "$ZPRD_CONF" | tail -1 | cut -c2-)"
-ZPRD_IP="$(grep '^A' "$ZPRD_CONF" | tail -1 | cut -c2-)"
 
-if [ -z "$IFACE" ] || [ -z "$ZPRD_IP" ]; then
-  echo "STARTUP ERROR: 'A' or 'I' config statement is missing in $ZPRD_CONF"
+if [ -z "$IFACE" ]; then
+  echo "STARTUP ERROR: 'I' config statement is missing in $ZPRD_CONF"
   exit 1
 fi
+
+RUN_AS_USER="$(grep '^U' "$ZPRD_CONF" | tail -1 | cut -c2-)"
 
 if [ -z "$(ip tuntap show dev "$IFACE")" ]; then
   echo "STARTUP: setup tun device $IFACE"
   XTTA=''
   [ -n "$RUN_AS_USER" ] && XTTA="user $RUN_AS_USER"
   ip tuntap add mode tun $XTTA "$IFACE" || exit 1
-  ip addr add "$ZPRD_IP" dev "$IFACE"   || exit 1
   unset XTTA
 fi
-
-ip link set dev "$IFACE" mtu 1472
-ip link set dev "$IFACE" up
 
 exec /usr/bin/zprd "C$ZPRD_CONF"

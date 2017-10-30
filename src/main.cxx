@@ -259,6 +259,14 @@ struct {
 } zprd_conf;
 
 static void init_all(const string &confpath) {
+  static const auto runcmd = [](const string &cmd) {
+    printf("CONFIG APPLY: %s\n", cmd.c_str());
+    if(system(cmd.c_str())) {
+      perror("system()");
+      exit(1);
+    }
+  };
+
   // redirect stdin (don't block terminals)
   {
     const int ofd = open("/dev/null", O_RDONLY);
@@ -290,6 +298,8 @@ static void init_all(const string &confpath) {
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
 
+    string addr_stmt;
+
     string line;
     while(getline(in, line)) {
       if(line.empty()) continue;
@@ -299,22 +309,7 @@ static void init_all(const string &confpath) {
           break;
 
         case 'A':
-          {
-            const size_t marker = arg.find('/');
-            const string ip = arg.substr(0, marker);
-            printf("CONFIG DEBUG: got local ip = %s\n", ip.c_str());
-            string cidrsf = "32";
-            if(marker != string::npos)
-              cidrsf = arg.substr(marker + 1);
-
-            if(!resolve_hostname(ip.c_str(), local_ip)) {
-              fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: '%s'\n", line.c_str());
-              exit(1);
-            }
-
-            local_netmask.s_addr = cidr_to_netmask(stoi(cidrsf));
-            printf("CONFIG DEBUG: got local netmask = %s\n", inet_ntoa(local_netmask));
-          }
+          addr_stmt = arg;
           break;
 
         case 'I':
@@ -343,6 +338,32 @@ static void init_all(const string &confpath) {
       }
     }
     in.close();
+
+    if(zprd_conf.iface.empty()) {
+      fprintf(stderr, "CONFIG ERROR: no interface specified\n");
+      exit(1);
+    }
+
+    if(!addr_stmt.empty()) {
+      const size_t marker = addr_stmt.find('/');
+      const string ip = addr_stmt.substr(0, marker);
+      string cidrsf = "32";
+      if(marker != string::npos)
+        cidrsf = addr_stmt.substr(marker + 1);
+
+      if(!resolve_hostname(ip.c_str(), local_ip)) {
+        fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: '%s'\n", line.c_str());
+        exit(1);
+      }
+
+      local_netmask.s_addr = cidr_to_netmask(stoi(cidrsf));
+
+      runcmd("ip addr flush '" + zprd_conf.iface + "'");
+      runcmd("ip addr add '" + addr_stmt + "' dev '" + zprd_conf.iface + "'");
+    }
+
+    runcmd("ip link set dev '" + zprd_conf.iface + "' mtu 1472");
+    runcmd("ip link set dev '" + zprd_conf.iface + "' up");
 
     if(!run_as_user.empty()) {
       printf("running daemon as user: '%s'\n", run_as_user.c_str());
