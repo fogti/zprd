@@ -31,15 +31,12 @@
 #include <net/if.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
-#include <linux/in.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <arpa/inet.h>
 #include <sys/select.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
-#include <netdb.h>
 #include <errno.h>
 
 // C++
@@ -441,26 +438,6 @@ static void init_all(const string &confpath) {
     perror("bind()");
     exit(1);
   }
-}
-
-static bool get_local_xxxip_generic(struct in_addr &ret, struct ifreq &ifr, const unsigned long what, struct sockaddr &sa) {
-  memset(&ret, 0, sizeof(ret));
-
-  if(server_fd < 0) return false;
-
-  memset(&ifr, 0, sizeof(ifr));
-
-  ifr.ifr_addr.sa_family = AF_INET;
-  strncpy(ifr.ifr_name, zprd_conf.iface.c_str(), IFNAMSIZ - 1);
-
-  if(ioctl(server_fd, what, static_cast<void *>(&ifr)) < 0 ) {
-    perror("ioctl(SIOCGIF...ADDR)");
-    return false;
-  }
-
-  ret = reinterpret_cast<struct sockaddr_in*>(&sa)->sin_addr;
-
-  return true;
 }
 
 // get_remote_desc: returns a description string of socket ip
@@ -955,35 +932,6 @@ int main(int argc, char *argv[]) {
     my_signal(SIGUSR1, print_routing_table);
     fflush(stdout);
     fflush(stderr);
-  }
-
-  {
-    struct ifreq ifr;
-    struct in_addr tmp_local_ip, tmp_local_netmask;
-    bool tmp_have_local_ip  = get_local_xxxip_generic(tmp_local_ip,      ifr, SIOCGIFADDR,    ifr.ifr_addr);
-    bool have_local_netmask = get_local_xxxip_generic(tmp_local_netmask, ifr, SIOCGIFNETMASK, ifr.ifr_netmask);
-
-    if(tmp_have_local_ip && !have_local_netmask) {
-      puts("ROUTER ERROR: got local ip but no local netmask ip");
-      exit(1);
-    }
-
-    if(!tmp_have_local_ip && have_local_ip) {
-      puts("ROUTER ERROR: set local ip but got no ip");
-      exit(1);
-    }
-
-    if(have_local_ip && local_ip != tmp_local_ip) {
-      printf("ROUTER ERROR: local ip mismatch : set = %s; ", inet_ntoa(local_ip));
-      printf("got = %s\n", inet_ntoa(tmp_local_ip));
-      exit(1);
-    }
-
-    if(have_local_ip && local_netmask != tmp_local_netmask) {
-      printf("ROUTER ERROR: local netmask mismatch : set = %s; ", inet_ntoa(local_netmask));
-      printf("got = %s\n", inet_ntoa(tmp_local_netmask));
-      exit(1);
-    }
   }
 
   while(1) {
