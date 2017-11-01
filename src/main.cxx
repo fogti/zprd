@@ -1050,12 +1050,11 @@ int main(int argc, char *argv[]) {
     unordered_map<uint32_t, uint32_t> tr_remotes;
 
     for(auto it = remotes.begin(); it != remotes.end();) {
+      if(it->second.cent != -1)
+        found_remotes.emplace(it->second.cent);
+
       // skip local, and remotes which aren't timed out
       if(it->first == local_ip.s_addr || !it->second.outdated()) {
-        // update found remotes list
-        if(it->second.cent != -1)
-          found_remotes.emplace(it->second.cent);
-
         ++it;
         continue;
       }
@@ -1064,7 +1063,6 @@ int main(int argc, char *argv[]) {
         // try to update ip
         struct in_addr remote;
         if(resolve_hostname(zprd_conf.remotes[it->second.cent].c_str(), remote)) {
-          found_remotes.emplace(it->second.cent);
           it->second.refresh();
           if(remote.s_addr != it->first)
             tr_remotes[it->first] = remote.s_addr;
@@ -1093,7 +1091,7 @@ int main(int argc, char *argv[]) {
         ++it;
     }
 
-    // replace remotes
+    // replace remotes (after cleanup -> lesser routes to process)
     for(auto &&i : tr_remotes) {
       for(auto &r: routes)
         r.second.replace_router(i.first, i.second);
@@ -1104,13 +1102,11 @@ int main(int argc, char *argv[]) {
 
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
-
-      // reconnect
       for(auto &&r : zprd_conf.remotes) {
         struct in_addr remote;
         if(!found_remotes.erase(i) && resolve_hostname(r.c_str(), remote)) {
           remotes[remote.s_addr] = {i};
-          printf("CLIENT: reconnected to server %s\n", inet_ntoa(remote));
+          printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
         }
         ++i;
       }
