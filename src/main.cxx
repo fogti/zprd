@@ -78,17 +78,17 @@ struct remote_peer_t {
   time_t  seen;
   ssize_t cent; // config entry
 
-  remote_peer_t()
+  remote_peer_t() noexcept
     : seen(time(0)), cent(-1) { }
 
-  explicit remote_peer_t(size_t cfgent)
+  remote_peer_t(const size_t cfgent) noexcept
     : seen(time(0)), cent(static_cast<ssize_t>(cfgent)) { }
 
-  void refresh() {
+  void refresh() noexcept {
     seen = time(0);
   }
 
-  bool outdated() const {
+  bool outdated() const noexcept {
     return (time(0) - seen) >= remote_timeout;
   }
 };
@@ -228,6 +228,43 @@ struct route_via_t {
     it->seen = time(0);
     it->hops = hops;
     it->latency = latency;
+  }
+
+  /** replace_router:
+   *
+   * invariant: rold != rnew
+   * timing:
+   *  base:             n (all routers except if we reach both rold + rnew before)
+   *  if o + n found:  +n
+   *
+   * @param rold, rnew   old and new router addr
+   **/
+  void replace_router(const uint32_t rold, const uint32_t rnew) {
+    auto it_e = _routers.end();
+    auto it_o = it_e;
+    bool nf = false;
+
+    for(auto it = _routers.begin(); it != it_e; ++it) {
+      if(it->addr == rold)
+        it_o = it;
+      else if(it->addr == rnew)
+        nf = true;
+      else
+        continue;
+
+      if(nf && it_o != it_e)
+        break;
+    }
+
+    if(it_o == it_e) return;
+
+    if(nf) {
+      // we found only old
+      it_o->addr = rnew;
+    } else {
+      // we found new and old
+      del_router(rold);
+    }
   }
 
   bool del_router(const uint32_t router) {
@@ -441,7 +478,7 @@ static void init_all(const string &confpath) {
     for(auto &&r : zprd_conf.remotes) {
       struct in_addr remote;
       if(resolve_hostname(r.c_str(), remote)) {
-        remotes[remote.s_addr] = remote_peer_t(i);
+        remotes[remote.s_addr] = {i};
         printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
       }
       ++i;
@@ -507,7 +544,7 @@ static int send_packet(const uint32_t ent, const char *buffer, const int buflen)
 /** set_ip_df
  * sets or unsets the dont-frag bit in the outer ip header
  **/
-static void set_ip_df(const struct ip *h_ip) {
+static void set_ip_df(const struct ip * const h_ip) {
   const bool df = h_ip->ip_off & htons(IP_DF);
   const int tmp_df = df ?
 #if defined(IP_DONTFRAG)
@@ -651,14 +688,9 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       }
     })();
 
-  // broadcast ip
-  const struct in_addr brdcip = { (local_ip.s_addr & local_netmask.s_addr) | (~local_netmask.s_addr) };
-  const bool have_brdcip      = have_local_ip;
-
-  const auto &ip_src          = h_ip->ip_src;
-  const auto &ip_dst          = h_ip->ip_dst;
-
-  const bool is_unknown_src   = is_broadcast_addr(ip_src) || (have_brdcip && brdcip == ip_src);
+  const auto &ip_src        = h_ip->ip_src;
+  const auto &ip_dst        = h_ip->ip_dst;
+  const bool is_unknown_src = is_broadcast_addr(ip_src);
 
   if(buflen > 2000) {
     printf("ROUTER: drop packet %u (too big, size = %u) from %s\n", pkid, buflen, source_desc_c);
@@ -701,7 +733,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
-  const bool broadcast_is_dst = is_broadcast_addr(ip_dst) || (have_brdcip && brdcip == ip_dst);
+  const bool broadcast_is_dst = is_broadcast_addr(ip_dst);
   bool is_broadcast = broadcast_is_dst;
 
   if(!is_broadcast) {
@@ -731,7 +763,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     auto it_e = ret.end();
     ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
 
-    if(!broadcast_is_dst && netmask_match && ip_dst != local_ip && source_peer_ip != local_ip.s_addr) {
+    if(source_peer_ip != local_ip.s_addr && !broadcast_is_dst && netmask_match && ip_dst != local_ip) {
       // handle the case when one of my local routes is the destination
       bool rm_local = true;
       for(auto &&i : zprd_conf.locals)
@@ -1015,8 +1047,9 @@ int main(int argc, char *argv[]) {
     };
 
     set<size_t> found_remotes;
+    unordered_map<uint32_t, uint32_t> tr_remotes;
 
-    for(auto it = remotes.cbegin(); it != remotes.cend();) {
+    for(auto it = remotes.begin(); it != remotes.end();) {
       // skip local, and remotes which aren't timed out
       if(it->first == local_ip.s_addr || !it->second.outdated()) {
         // update found remotes list
@@ -1025,6 +1058,19 @@ int main(int argc, char *argv[]) {
 
         ++it;
         continue;
+      }
+
+      if(it->second.cent != -1) {
+        // try to update ip
+        struct in_addr remote;
+        if(resolve_hostname(zprd_conf.remotes[it->second.cent].c_str(), remote)) {
+          found_remotes.emplace(it->second.cent);
+          it->second.refresh();
+          if(remote.s_addr != it->first)
+            tr_remotes[it->first] = remote.s_addr;
+          ++it;
+          continue;
+        }
       }
 
       for(auto &r: routes)
@@ -1047,6 +1093,15 @@ int main(int argc, char *argv[]) {
         ++it;
     }
 
+    // replace remotes
+    for(auto &&i : tr_remotes) {
+      for(auto &r: routes)
+        r.second.replace_router(i.first, i.second);
+
+      remotes[i.second] = remotes[i.first];
+      remotes.erase(i.first);
+    }
+
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
 
@@ -1054,7 +1109,7 @@ int main(int argc, char *argv[]) {
       for(auto &&r : zprd_conf.remotes) {
         struct in_addr remote;
         if(!found_remotes.erase(i) && resolve_hostname(r.c_str(), remote)) {
-          remotes[remote.s_addr] = remote_peer_t(i);
+          remotes[remote.s_addr] = {i};
           printf("CLIENT: reconnected to server %s\n", inet_ntoa(remote));
         }
         ++i;
