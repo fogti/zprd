@@ -58,7 +58,7 @@ int tun_alloc(char *dev, const int flags) {
 static int crw_end(const int cnt, const char * const action, const int fd) {
   if(cnt >= 0) return cnt;
   perror(action);
-  printf("  %s fd = %d\n", fd);
+  printf("  %s fd = %d\n", action, fd);
   exit(1);
 }
 
