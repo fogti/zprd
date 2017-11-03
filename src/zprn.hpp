@@ -15,7 +15,7 @@ struct zprn {
     } route;
   } zprn_un;
 
-  void init();
+  zprn();
   bool valid() const noexcept;
   void send(const std::set<uint32_t> &peers) const;
 };

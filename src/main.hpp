@@ -1,6 +1,8 @@
 #ifndef ZPRD_MAIN_HPP
 # define ZPRD_MAIN_HPP 1
 # include <inttypes.h>
+void set_ip_df(const uint8_t frag);
+
 /** send_packet:
  * handles the sending of packets to a remote or local (identified by a)
  *

@@ -93,6 +93,8 @@ struct remote_peer_t {
   bool outdated() const noexcept {
     return (time(0) - seen) >= remote_timeout;
   }
+
+  const char *cfgent_name() const;
 };
 
 static unordered_map<uint32_t, remote_peer_t> remotes;
@@ -313,6 +315,14 @@ struct {
   vector<string> remotes;
   vector<local_route> locals;
 } zprd_conf;
+
+const char *remote_peer_t::cfgent_name() const {
+  if(cent < 0) return "-";
+  const auto &r = zprd_conf.remotes;
+  const auto ce = static_cast<size_t>(cent);
+  if(ce >= r.size()) return "####";
+  return r[ce].c_str();
+}
 
 static void init_all(const string &confpath) {
   static const auto runcmd = [](const string &cmd) {
@@ -548,7 +558,7 @@ int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
   return csendto(server_fd, buffer, buflen, &dsta);
 }
 
-static void set_ip_df(const uint8_t frag) {
+void set_ip_df(const uint8_t frag) {
   const bool df = frag & htons(IP_DF);
   const int tmp_df = df ?
 #if defined(IP_DONTFRAG)
@@ -664,12 +674,13 @@ static void send_zprn_msg(const zprn &msg) {
   peers.erase(local_ip.s_addr);
 
   // filter default router
-  if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255)
-    peers.erase(routes[msg.zprn_un.route.dsta].get_router());
+  if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255) {
+    const auto it = routes.find(msg.zprn_un.route.dsta);
+    if(it != routes.end() && !it->second.empty())
+      peers.erase(it->second.get_router());
+  }
 
   { // setup outer header
-    set_ip_df(static_cast<uint8_t>(0));
-
     uint8_t tos = 0;
     if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
@@ -844,6 +855,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
               case ICMP_UNREACH_NET:
                 rm_route = true;
                 break;
+              default: break;
             }
             break;
 
@@ -975,6 +987,15 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
             // delete route
             if(routes[rinf.dsta].del_router(srca.s_addr))
               printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({rinf.dsta}), source_desc_c);
+
+            if(rinf.dsta == local_ip.s_addr) {
+              // a route to us is deleted (and we know we are here)
+              zprn msg;
+              msg.zprn_cmd = 0;
+              msg.zprn_un.route.hops = 0;
+              msg.zprn_un.route.dsta = rinf.dsta;
+              send_zprn_msg(msg);
+            }
           } else {
             // add route
             if(routes[rinf.dsta].add_router(srca.s_addr, rinf.hops + 1))
@@ -1020,15 +1041,10 @@ static string format_time(const time_t x) {
 static void print_routing_table(int) {
   puts("-- connected peers:");
   puts("Peer\t\tSeen\t\tConfig Entry");
-  {
-    for(auto &&i: remotes) {
-      const string seen = format_time(i.second.seen);
-      printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
-      if(i.second.cent < 0) putchar('-');
-      else if(i.second.cent >= zprd_conf.remotes.size()) printf("####");
-      else printf("%s", zprd_conf.remotes[i.second.cent].c_str());
-      puts("");
-    }
+  for(auto &&i: remotes) {
+    const auto seen = format_time(i.second.seen);
+    printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
+    puts(i.second.cfgent_name());
   }
   puts("-- routing table:");
   puts("Destination\tGateway\t\tSeen\t\tLatency\tHops");
@@ -1036,7 +1052,7 @@ static void print_routing_table(int) {
     const string dest = inet_ntoa({i.first});
     for(auto &&r: i.second._routers) {
       const string gateway = inet_ntoa({r.addr});
-      const string seen = format_time(r.seen);
+      const auto seen = format_time(r.seen);
       printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
@@ -1137,7 +1153,7 @@ int main(int argc, char *argv[]) {
       if(it->second.cent != -1) {
         // try to update ip
         struct in_addr remote;
-        if(resolve_hostname(zprd_conf.remotes[it->second.cent].c_str(), remote)) {
+        if(resolve_hostname(it->second.cfgent_name(), remote)) {
           it->second.refresh();
           if(remote.s_addr != it->first)
             tr_remotes[it->first] = remote.s_addr;
@@ -1161,7 +1177,6 @@ int main(int argc, char *argv[]) {
       });
 
       zprn msg;
-      msg.init();
       msg.zprn_cmd = 0;
       msg.zprn_un.route.dsta = it->first;
       if(it->second.empty()) {

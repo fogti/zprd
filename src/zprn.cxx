@@ -8,10 +8,8 @@
 #include "main.hpp"
 #include "zprn.hpp"
 
-void zprn::init() {
-  zprn_mgc = 0;
-  zprn_ver = 0;
-  zprn_cmd = 0;
+zprn::zprn()
+ : zprn_mgc(0), zprn_ver(0), zprn_cmd(0) {
   memset(&zprn_un, 0, sizeof(zprn_un));
 }
 
@@ -29,6 +27,8 @@ bool zprn::valid() const noexcept {
 }
 
 void zprn::send(const std::set<uint32_t> &peers) const {
+  set_ip_df(static_cast<uint8_t>(0));
+
   for(auto &&peer : peers)
     send_packet(peer, reinterpret_cast<const char *>(this), sizeof(*this));
 }
