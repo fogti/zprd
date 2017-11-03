@@ -54,7 +54,9 @@
 #include "crw.h"
 #include "recentpkts.hpp"
 #include "resolve.hpp"
+#include "zprn.hpp"
 #include "zsig.h"
+#include "main.hpp"
 
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 65536
@@ -163,6 +165,9 @@ static ping_cache_t ping_cache;
 // collection of via_route_t's
 struct route_via_t {
   std::forward_list<via_router_t> _routers;
+  bool _fresh_add;
+
+  route_via_t(): _fresh_add(false) { }
 
   // deletes all outdates routers and sort routers
   template<typename Fn>
@@ -195,11 +200,13 @@ struct route_via_t {
   }
 
   uint32_t get_router() const noexcept {
-    return empty() ? INADDR_ANY : _routers.front().addr;
+    return empty() ? htonl(INADDR_ANY) : _routers.front().addr;
   }
 
   // add or modify a router
   bool add_router(const uint32_t router, const uint8_t hops) {
+    if(empty()) _fresh_add = true;
+
     const auto it_e = _routers.end();
     const auto it = find_if(_routers.begin(), it_e,
       [router](const via_router_t &i) noexcept {
@@ -529,7 +536,7 @@ static string get_remote_desc(const uint32_t addr) {
  * @param buflen  the length of the buffer
  * @ret           written bytes count
  **/
-static int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
+int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
   if((have_local_ip && ent == local_ip.s_addr) || ent == htonl(0))
     return cwrite(local_fd, buffer, buflen);
 
@@ -541,11 +548,8 @@ static int send_packet(const uint32_t ent, const char *buffer, const int buflen)
   return csendto(server_fd, buffer, buflen, &dsta);
 }
 
-/** set_ip_df
- * sets or unsets the dont-frag bit in the outer ip header
- **/
-static void set_ip_df(const struct ip * const h_ip) {
-  const bool df = h_ip->ip_off & htons(IP_DF);
+static void set_ip_df(const uint8_t frag) {
+  const bool df = frag & htons(IP_DF);
   const int tmp_df = df ?
 #if defined(IP_DONTFRAG)
     1 : 0;
@@ -559,6 +563,13 @@ static void set_ip_df(const struct ip * const h_ip) {
 # warning "set_ip_df: no method available to manage the dont-frag bit"
     0 : 0;
 #endif
+}
+
+/** set_ip_df
+ * sets or unsets the dont-frag bit in the outer ip header
+ **/
+static void set_ip_df(const struct ip * const h_ip) {
+  set_ip_df(h_ip->ip_off);
 }
 
 enum zprd_icmpe {
@@ -644,6 +655,26 @@ static void apply_ping_cache_match(const ping_cache_match &m) {
   rit->second.update_router(m.router, m.hops, m.diff);
 }
 
+static void send_zprn_msg(const zprn &msg) {
+  set<uint32_t> peers;
+  for(auto &&i: remotes)
+    peers.emplace(i.first);
+
+  // filter default router
+  if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255)
+    peers.erase(routes[msg.zprn_un.route.dsta].get_router());
+
+  { // setup outer header
+    set_ip_df(false);
+
+    uint8_t tos = 0;
+    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+  }
+
+  msg.send(peers);
+}
+
 /** route_packet:
  *
  * decide which fd is the destination,
@@ -657,7 +688,7 @@ static void apply_ping_cache_match(const ping_cache_match &m) {
  *
  * @ret             the ips of the destination sockets
  **/
-static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
+static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
@@ -747,21 +778,19 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   }
 
   // get route to destination
-  vector<uint32_t> ret;
-
+  set<uint32_t> ret;
   if(is_broadcast) {
     for(auto &&i : remotes)
-      ret.emplace_back(i.first);
-    ret.emplace_back(local_ip.s_addr);
+      ret.emplace(i.first);
+    ret.emplace(local_ip.s_addr);
   } else {
-    ret.emplace_back(routes[ip_dst.s_addr].get_router());
+    ret.emplace(routes[ip_dst.s_addr].get_router());
   }
 
   const bool netmask_match = have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr);
 
   { // split horizon
-    auto it_e = ret.end();
-    ret.erase(std::remove(ret.begin(), it_e, source_peer_ip), it_e);
+    ret.erase(source_peer_ip);
 
     if(source_peer_ip != local_ip.s_addr && !broadcast_is_dst && netmask_match && ip_dst != local_ip) {
       // handle the case when one of my local routes is the destination
@@ -773,10 +802,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
         }
 
       // catch bouncing packets in *local iface* network earlier
-      if(rm_local) {
-        it_e = ret.end();
-        ret.erase(std::remove(ret.begin(), it_e, local_ip.s_addr), it_e);
-      }
+      if(rm_local) ret.erase(local_ip.s_addr);
     }
   }
 
@@ -817,6 +843,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
                 break;
             }
             break;
+
+          default: break;
         }
         if(rm_route) {
           // drop routing table entry, if there is any
@@ -842,13 +870,15 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
         const auto &echo = h_icmp->un.echo;
         switch(h_icmp->type) {
           case ICMP_ECHO:
-            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, ret.front(), echo.id, echo.sequence, h_ip->ip_ttl);
+            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, *ret.begin(), echo.id, echo.sequence, h_ip->ip_ttl);
             break;
 
           case ICMP_ECHOREPLY:
             if(!ping_cache.empty())
               apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence, h_ip->ip_ttl));
             break;
+
+          default: break;
         }
       }
     }
@@ -899,7 +929,24 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
   return true;
 }
 
-/** read_ip_packet
+/** is_zprn_packet
+ * checks, if packet is a valid ZPRN packet
+ *
+ * @param buffer  the packet data
+ * @param len     the length of the packet
+ * @ret           is valid
+ **/
+static bool is_zprn_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) {
+  if(sizeof(struct zprn) > len)
+    return false;
+
+  if(!(reinterpret_cast<const struct zprn*>(buffer)->valid()))
+    return false;
+
+  return true;
+}
+
+/** read_packet
  * reads an variable length ipv4 packet
  *
  * @param srca    (out) the source ip
@@ -907,13 +954,38 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
  * @param len     (out) the length of the packet
  * @ret           succesful marker
  **/
-static bool read_ip_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
+static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   struct sockaddr_in source;
   const uint16_t nread = recv_n(server_fd, buffer, BUFSIZE, &source);
   srca = source.sin_addr;
 
   const string source_desc = get_remote_desc(srca.s_addr);
   const char * const source_desc_c = source_desc.c_str();
+
+  if(is_zprn_packet(source_desc_c, buffer, nread)) {
+    const auto d_zprn = reinterpret_cast<const struct zprn*>(buffer);
+    switch(d_zprn->zprn_cmd) {
+      case 0:
+        {
+          const auto rinf = d_zprn->zprn_un.route;
+          if(rinf.hops == 255) {
+            // delete route
+            if(routes[rinf.dsta].del_router(srca.s_addr))
+              printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({rinf.dsta}), source_desc_c);
+          } else {
+            // add route
+            if(routes[rinf.dsta].add_router(srca.s_addr, rinf.hops + 1))
+              printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({rinf.dsta}), source_desc_c);
+          }
+        }
+        break;
+
+      default: break;
+    }
+
+    // don't forward
+    return false;
+  }
 
   if(!is_ipv4_packet(source_desc_c, buffer, nread)) return false;
 
@@ -1032,9 +1104,9 @@ int main(int argc, char *argv[]) {
       }
 
       if(FD_ISSET(server_fd, &rd_set)) {
-        // data from the network: read it, and write it to the tun/tap interface.
         struct in_addr addr;
-        if(read_ip_packet(addr, buffer, nread))
+        // data from the network: read it, and write it to the tun/tap interface.
+        if(read_packet(addr, buffer, nread))
           progress_packet(addr, buffer, nread);
       }
     }
@@ -1085,10 +1157,24 @@ int main(int argc, char *argv[]) {
         del_route_msg(it->first, router);
       });
 
-      if(it->second.empty())
+      zprn msg;
+      msg.init();
+      msg.zprn_cmd = 0;
+      msg.zprn_un.route.dsta = it->first;
+      if(it->second.empty()) {
+        msg.zprn_un.route.hops = 255;
+        send_zprn_msg(msg);
+
         it = routes.erase(it);
-      else
+      } else {
+        if(it->second._fresh_add) {
+          it->second._fresh_add = false;
+          msg.zprn_un.route.hops = it->second._routers.front().hops;
+          send_zprn_msg(msg);
+        }
+
         ++it;
+      }
     }
 
     // replace remotes (after cleanup -> lesser routes to process)

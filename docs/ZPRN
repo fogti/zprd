@@ -1,0 +1,15 @@
+Zscheile Peer Routing Notification (only used inside of ZPRD)
+
+Packet Header:
+ 1     1         1
+[MGC] [Version] [Command]
+
+Route Update Packet Format: (CMD eq to 00 or 01)
+      00 00 00 [Hop Count] [IPv4 Route Dest]
+bytes 3         1           32
+
+Route update packets are send to every peer
+except the default router.
+
+CMD PKGFORMAT DESC
+00  -ROUTE    add/del route

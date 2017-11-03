@@ -8,5 +8,5 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/src")
-add_executable(zprd src/addr.cxx src/cksum.c src/crw.c src/main.cxx src/recentpkts.cxx src/resolve.cxx src/zsig.c)
+add_executable(zprd src/addr.cxx src/cksum.c src/crw.c src/main.cxx src/recentpkts.cxx src/resolve.cxx src/zprn.cxx src/zsig.c)
 install(TARGETS zprd DESTINATION "${INSTALL_BIN_DIR}")
