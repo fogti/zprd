@@ -665,7 +665,7 @@ static void send_zprn_msg(const zprn &msg) {
     peers.erase(routes[msg.zprn_un.route.dsta].get_router());
 
   { // setup outer header
-    set_ip_df(false);
+    set_ip_df(static_cast<uint8_t>(0));
 
     uint8_t tos = 0;
     if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
