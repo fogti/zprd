@@ -55,23 +55,24 @@ int tun_alloc(char *dev, const int flags) {
   return fd;
 }
 
-static int crw_end(const int cnt, const char * const action) {
+static int crw_end(const int cnt, const char * const action, const int fd) {
   if(cnt >= 0) return cnt;
   perror(action);
+  printf("  %s fd = %d\n", fd);
   exit(1);
 }
 
 int cread(const int fd, char *buf, const int n) {
   return crw_end(
     read(fd, buf, n),
-    "read()"
+    "read()", fd
   );
 }
 
 int cwrite(const int fd, const char *buf, const int n) {
   return crw_end(
     write(fd, buf, n),
-    "write()"
+    "write()", fd
   );
 }
 
@@ -91,14 +92,14 @@ int crecvfrom(const int fd, char *buf, const int n, struct sockaddr_in *addr) {
   socklen_t addrlen = sizeof(*addr);
   return crw_end(
     recvfrom(fd, buf, n, 0, (struct sockaddr *) addr, &addrlen),
-    "recvfrom()"
+    "recvfrom()", fd
   );
 }
 
 int csendto(const int fd, const char *buf, const int n, const struct sockaddr_in *addr) {
   return crw_end(
     sendto(fd, buf, n, 0, (struct sockaddr *) addr, sizeof(*addr)),
-    "sendto()"
+    "sendto()", fd
   );
 }
 

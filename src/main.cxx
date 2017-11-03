@@ -660,6 +660,9 @@ static void send_zprn_msg(const zprn &msg) {
   for(auto &&i: remotes)
     peers.emplace(i.first);
 
+  // filter local tun interface
+  peers.erase(local_ip.s_addr);
+
   // filter default router
   if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255)
     peers.erase(routes[msg.zprn_un.route.dsta].get_router());

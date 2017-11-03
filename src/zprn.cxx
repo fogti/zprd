@@ -30,5 +30,5 @@ bool zprn::valid() const noexcept {
 
 void zprn::send(const std::set<uint32_t> &peers) const {
   for(auto &&peer : peers)
-    send_packet(peer, reinterpret_cast<const char *>(this), sizeof(zprn));
+    send_packet(peer, reinterpret_cast<const char *>(this), sizeof(*this));
 }
