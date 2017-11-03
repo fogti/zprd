@@ -531,6 +531,12 @@ static void init_all(const string &confpath) {
   }
 }
 
+static route_via_t* have_route(const uint32_t dsta) {
+  const auto it = routes.find(dsta);
+  if(it == routes.end() || it->second.empty()) return 0;
+  return &(it->second);
+}
+
 // get_remote_desc: returns a description string of socket ip
 static string get_remote_desc(const uint32_t addr) {
   return (addr == local_ip.s_addr)
@@ -660,28 +666,27 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 
 static void apply_ping_cache_match(const ping_cache_match &m) {
   if(!m.match) return;
-  const auto rit = routes.find(m.dst);
-  if(rit == routes.end()) return;
-  rit->second.update_router(m.router, m.hops, m.diff);
+  const auto r = have_route(m.dst);
+  if(r) r->update_router(m.router, m.hops, m.diff);
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  set<uint32_t> peers;
+  vector<uint32_t> peers;
   for(auto &&i: remotes)
-    peers.emplace(i.first);
+    peers.emplace_back(i.first);
 
   // filter local tun interface
-  peers.erase(local_ip.s_addr);
+  peers.erase(std::remove(peers.begin(), peers.end(), local_ip.s_addr), peers.end());
 
   // filter default router
   if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255) {
-    const auto it = routes.find(msg.zprn_un.route.dsta);
-    if(it != routes.end() && !it->second.empty())
-      peers.erase(it->second.get_router());
+    const auto r = have_route(msg.zprn_un.route.dsta);
+    if(r)
+      peers.erase(std::remove(peers.begin(), peers.end(), r->get_router()), peers.end());
   }
 
   { // setup outer header
-    uint8_t tos = 0;
+    const uint8_t tos = 0;
     if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
   }
@@ -865,17 +870,16 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
           // drop routing table entry, if there is any
           const auto h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
           const auto target = h_ip2->ip_dst; // original destination
-          const auto rit = routes.find(target.s_addr);
-          if(rit != routes.end() && !rit->second.empty()) {
-            auto &route = rit->second;
-            if(route.del_router(source_peer_ip)) {
+          const auto r = have_route(target.s_addr);
+          if(r) {
+            if(r->del_router(source_peer_ip)) {
               // routing table entry dropped
               printf("ROUTER: delete route to %s ", inet_ntoa(target));
               const auto d = get_remote_desc(source_peer_ip);
               printf("via %s (unreachable)\n", d.c_str());
             }
             // if there is a routing table entry left -> discard
-            if(!route.empty()) ret.clear();
+            if(!r->empty()) ret.clear();
           }
         }
       } else if(!is_unknown_src && !is_broadcast) {
@@ -984,16 +988,21 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
         {
           const auto rinf = d_zprn->zprn_un.route;
           if(rinf.hops == 255) {
+            const auto r = have_route(rinf.dsta);
             // delete route
-            if(routes[rinf.dsta].del_router(srca.s_addr))
+            if(r && r->del_router(srca.s_addr))
               printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({rinf.dsta}), source_desc_c);
 
+            zprn msg;
+            msg.zprn_cmd = 0;
+            msg.zprn_un.route.dsta = rinf.dsta;
             if(rinf.dsta == local_ip.s_addr) {
               // a route to us is deleted (and we know we are here)
-              zprn msg;
-              msg.zprn_cmd = 0;
               msg.zprn_un.route.hops = 0;
-              msg.zprn_un.route.dsta = rinf.dsta;
+              send_zprn_msg(msg);
+            } else if(r && !r->empty()) {
+              // we have a route
+              msg.zprn_un.route.hops = r->_routers.front().hops;
               send_zprn_msg(msg);
             }
           } else {
