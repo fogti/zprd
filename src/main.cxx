@@ -326,8 +326,8 @@ const char *remote_peer_t::cfgent_name() const {
 
 static void init_all(const string &confpath) {
   static const auto runcmd = [](const string &cmd) {
-    printf("CONFIG APPLY: %s\n", cmd.c_str());
     if(system(cmd.c_str())) {
+      printf("CONFIG APPLY ERROR: %s\n", cmd.c_str());
       perror("system()");
       exit(1);
     }
@@ -1146,6 +1146,7 @@ int main(int argc, char *argv[]) {
       printf("via %s (outdated)\n", d.c_str());
     };
 
+    vector<uint32_t> discard_remotes;
     set<size_t> found_remotes;
     unordered_map<uint32_t, uint32_t> tr_remotes;
 
@@ -1153,30 +1154,32 @@ int main(int argc, char *argv[]) {
       if(it->second.cent != -1)
         found_remotes.emplace(it->second.cent);
 
+      bool discard = true;
+
       // skip local, and remotes which aren't timed out
       if(it->first == local_ip.s_addr || !it->second.outdated()) {
-        ++it;
-        continue;
-      }
-
-      if(it->second.cent != -1) {
+        discard = false;
+      } else if(it->second.cent != -1) {
         // try to update ip
         struct in_addr remote;
         if(resolve_hostname(it->second.cfgent_name(), remote)) {
           it->second.refresh();
           if(remote.s_addr != it->first)
             tr_remotes[it->first] = remote.s_addr;
-          ++it;
-          continue;
+          discard = false;
         }
       }
 
-      for(auto &r: routes)
-        if(r.second.del_router(it->first))
-          del_route_msg(r.first, it->first);
+      if(discard) {
+        for(auto &r: routes)
+          if(r.second.del_router(it->first))
+            del_route_msg(r.first, it->first);
 
-      // discard remote
-      it = remotes.erase(it);
+        discard_remotes.emplace_back(it->first);
+      }
+
+      ++it;
+      continue;
     }
 
     // cleanup routes, needs to be done after del_router calls
@@ -1204,6 +1207,21 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    // flush output
+    fflush(stdout);
+
+    // discard remotes (after cleanup -> cleanup has a chance to notify them)
+    sort(discard_remotes.begin(), discard_remotes.end());
+    for(auto it = remotes.cbegin(); it != remotes.cend();) {
+      const auto drit = lower_bound(discard_remotes.begin(), discard_remotes.end(), it->first);
+      if(drit != discard_remotes.end() && *drit == it->first) {
+        discard_remotes.erase(drit);
+        it = remotes.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
     // replace remotes (after cleanup -> lesser routes to process)
     for(auto &&i : tr_remotes) {
       for(auto &r: routes)
@@ -1212,6 +1230,7 @@ int main(int argc, char *argv[]) {
       remotes[i.second] = remotes[i.first];
       remotes.erase(i.first);
     }
+    tr_remotes.clear();
 
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
