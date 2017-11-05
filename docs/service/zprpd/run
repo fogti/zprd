@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Zscheile Peer Routing Ping Daemon
+# used to refresh the routing table of ZPRD
+#  (route, hop count and latency)
+
+while sleep $(( $RANDOM % 480 + 60 )); do
+  for i in $(< /etc/zprpd.conf); do
+    ping -c1 "$i" &>/dev/null || echo "$i failed"
+  done
+done
