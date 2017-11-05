@@ -589,7 +589,7 @@ static void set_ip_df(const struct ip * const h_ip) {
 }
 
 enum zprd_icmpe {
-  ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET, ZICMPM_QUENCH
+  ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
@@ -628,10 +628,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
     case ZICMPM_UNREACH_NET:
       h_icmp->type = ICMP_UNREACH;
       h_icmp->code = ICMP_UNREACH_NET;
-      break;
-
-    case ZICMPM_QUENCH:
-      h_icmp->type = ICMP_SOURCEQUENCH;
       break;
 
     default:
@@ -678,7 +674,7 @@ static void send_zprn_msg(const zprn &msg) {
   // filter local tun interface
   peers.erase(std::remove(peers.begin(), peers.end(), local_ip.s_addr), peers.end());
 
-  // filter default router
+  // split horizon
   if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255) {
     const auto r = have_route(msg.zprn_un.route.dsta);
     if(r)
@@ -738,16 +734,11 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
       }
     })();
 
-  const auto &ip_src        = h_ip->ip_src;
-  const auto &ip_dst        = h_ip->ip_dst;
-  const bool is_unknown_src = is_broadcast_addr(ip_src);
-
-  if(buflen > 2000) {
-    printf("ROUTER: drop packet %u (too big, size = %u) from %s\n", pkid, buflen, source_desc_c);
-    if(!is_unknown_src && !is_icmp_errmsg)
-      send_icmp_msg(ZICMPM_QUENCH, h_ip, source_peer_ip);
-    return {};
-  }
+  const auto &ip_src          = h_ip->ip_src;
+  const auto &ip_dst          = h_ip->ip_dst;
+  const bool is_unknown_src   = is_broadcast_addr(ip_src);
+  const bool broadcast_is_dst = is_broadcast_addr(ip_dst);
+  const bool allow_icmp_em    = !is_unknown_src && !broadcast_is_dst && !is_icmp_errmsg;
 
   // am I an endpoint
   const bool iam_ep = have_local_ip && (source_peer_ip == local_ip.s_addr || ip_dst == local_ip);
@@ -756,7 +747,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
     // ttl is too low -> DROP
     printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
-    if(!is_unknown_src && !is_icmp_errmsg)
+    if(allow_icmp_em)
       send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
     return {};
   }
@@ -783,7 +774,6 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
-  const bool broadcast_is_dst = is_broadcast_addr(ip_dst);
   bool is_broadcast = broadcast_is_dst;
 
   if(!is_broadcast) {
@@ -827,7 +817,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
-    if(!is_unknown_src && !broadcast_is_dst && !is_icmp_errmsg) {
+    if(allow_icmp_em) {
       if(netmask_match)
         send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
       else
