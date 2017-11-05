@@ -675,7 +675,7 @@ static void send_zprn_msg(const zprn &msg) {
   peers.erase(std::remove(peers.begin(), peers.end(), local_ip.s_addr), peers.end());
 
   // split horizon
-  if(msg.zprn_cmd == 0 && msg.zprn_un.route.hops != 255) {
+  if(msg.zprn_cmd == 0 && msg.zprn_prio != 255) {
     const auto r = have_route(msg.zprn_un.route.dsta);
     if(r)
       peers.erase(std::remove(peers.begin(), peers.end(), r->get_router()), peers.end());
@@ -976,29 +976,29 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
     switch(d_zprn->zprn_cmd) {
       case 0:
         {
-          const auto rinf = d_zprn->zprn_un.route;
-          if(rinf.hops == 255) {
-            const auto r = have_route(rinf.dsta);
+          const auto dsta = d_zprn->zprn_un.route.dsta;
+          if(d_zprn->zprn_prio == 255) {
+            const auto r = have_route(dsta);
             // delete route
             if(r && r->del_router(srca.s_addr))
-              printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({rinf.dsta}), source_desc_c);
+              printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
 
             zprn msg;
             msg.zprn_cmd = 0;
-            msg.zprn_un.route.dsta = rinf.dsta;
-            if(rinf.dsta == local_ip.s_addr) {
+            msg.zprn_un.route.dsta = dsta;
+            if(dsta == local_ip.s_addr) {
               // a route to us is deleted (and we know we are here)
-              msg.zprn_un.route.hops = 0;
+              msg.zprn_prio = 0;
               send_zprn_msg(msg);
             } else if(r && !r->empty()) {
               // we have a route
-              msg.zprn_un.route.hops = r->_routers.front().hops;
+              msg.zprn_prio = r->_routers.front().hops;
               send_zprn_msg(msg);
             }
           } else {
             // add route
-            if(routes[rinf.dsta].add_router(srca.s_addr, rinf.hops + 1))
-              printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({rinf.dsta}), source_desc_c);
+            if(routes[dsta].add_router(srca.s_addr, d_zprn->zprn_prio + 1))
+              printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
           }
         }
         break;
@@ -1101,8 +1101,8 @@ int main(int argc, char *argv[]) {
     // notify our peers that we are here
     zprn msg;
     msg.zprn_cmd = 0;
+    msg.zprn_prio = 0;
     msg.zprn_un.route.dsta = local_ip.s_addr;
-    msg.zprn_un.route.hops = 0;
     send_zprn_msg(msg);
   }
 
@@ -1191,14 +1191,14 @@ int main(int argc, char *argv[]) {
       msg.zprn_cmd = 0;
       msg.zprn_un.route.dsta = it->first;
       if(it->second.empty()) {
-        msg.zprn_un.route.hops = 255;
+        msg.zprn_prio = 255;
         send_zprn_msg(msg);
 
         it = routes.erase(it);
       } else {
         if(it->second._fresh_add) {
           it->second._fresh_add = false;
-          msg.zprn_un.route.hops = it->second._routers.front().hops;
+          msg.zprn_prio = it->second._routers.front().hops;
           send_zprn_msg(msg);
         }
 
