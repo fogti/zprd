@@ -796,12 +796,10 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
     ret.emplace(routes[ip_dst.s_addr].get_router());
   }
 
-  const bool netmask_match = have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr);
-
   { // split horizon
     ret.erase(source_peer_ip);
 
-    if(source_peer_ip != local_ip.s_addr && !broadcast_is_dst && netmask_match && ip_dst != local_ip) {
+    if(source_peer_ip != local_ip.s_addr && !broadcast_is_dst && ip_dst != local_ip) {
       // handle the case when one of my local routes is the destination
       bool rm_local = true;
       for(auto &&i : zprd_conf.locals)
@@ -818,7 +816,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(allow_icmp_em) {
-      if(netmask_match)
+      if(have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
         send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
       else
         send_icmp_msg(ZICMPM_UNREACH_NET, h_ip, source_peer_ip);
