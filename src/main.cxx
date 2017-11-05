@@ -358,7 +358,7 @@ static void init_all(const string &confpath) {
 
     // DEFAULTS
     data_port      = 45940; // P45940
-    remote_timeout = 900;   // T900
+    remote_timeout = 600;   // T600   = 10 min
     have_local_ip  = false;
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
@@ -1105,6 +1105,15 @@ int main(int argc, char *argv[]) {
     my_signal(SIGUSR1, print_routing_table);
     fflush(stdout);
     fflush(stderr);
+  }
+
+  {
+    // notify our peers that we are here
+    zprn msg;
+    msg.zprn_cmd = 0;
+    msg.zprn_un.route.dsta = local_ip.s_addr;
+    msg.zprn_un.route.hops = 0;
+    send_zprn_msg(msg);
   }
 
   while(1) {
