@@ -11,6 +11,8 @@ struct zprn {
    *
    * values:
    *    0 = route modification
+   *    1 = open/close connection
+   *        (close = 0x01FF)
    */
   uint8_t zprn_cmd;
 

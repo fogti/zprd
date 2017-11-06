@@ -1001,6 +1001,20 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
         }
         break;
 
+      case 1:
+        if(d_zprn->zprn_prio == 255) {
+          for(auto &r: routes)
+            if(r.second.del_router(srca.s_addr))
+              printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({r.first}), source_desc_c);
+
+          const auto dsta = d_zprn->zprn_un.route.dsta;
+          const auto r = have_route(dsta);
+          if(r) {
+            r->_routers.clear();
+            printf("ROUTER: delete route to %s (notified)\n", inet_ntoa({dsta}));
+          }
+        }
+
       default: break;
     }
 
@@ -1056,6 +1070,18 @@ static void print_routing_table(int) {
   fflush(stdout);
 }
 
+static void zprn_disconnect(int) {
+  // notify our peers that we quit
+  puts("ROUTER: disconnect from peers");
+  zprn msg;
+  msg.zprn_cmd = 1;
+  msg.zprn_prio = 255;
+  msg.zprn_un.route.dsta = local_ip.s_addr;
+  send_zprn_msg(msg);
+  puts("QUIT");
+  exit(0);
+}
+
 int main(int argc, char *argv[]) {
   { // parse command line
     string confpath = "/etc/zprd.conf";
@@ -1103,6 +1129,9 @@ int main(int argc, char *argv[]) {
     msg.zprn_un.route.dsta = local_ip.s_addr;
     send_zprn_msg(msg);
   }
+
+  my_signal(SIGINT,  zprn_disconnect);
+  my_signal(SIGTERM, zprn_disconnect);
 
   while(1) {
     { // use select() to handle two descriptors at once

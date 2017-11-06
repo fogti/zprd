@@ -18,6 +18,7 @@ bool zprn::valid() const noexcept {
 
   switch(zprn_cmd) {
     case 0:
+    case 1:
       return true;
 
     default:
