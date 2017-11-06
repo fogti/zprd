@@ -7,27 +7,19 @@ struct zprn {
   uint8_t zprn_mgc;
   uint8_t zprn_ver;
 
-  /* zprn_cmd = command
-   *
-   * values:
-   *    0 = route modification
-   *    1 = open/close connection
-   *        (close = 0x01FF)
-   */
+  // zprn_cmd = command
   uint8_t zprn_cmd;
+#define ZPRN_ROUTEMOD 0x00
+#define ZPRN_CONNMGMT 0x01
+#define ZPRN_RESULT   0x02
 
-  /* zprn_prio = priority
-   *
-   * encoding:
-   *    0   use first
-   *  255   worst / invalid / delete
-   *  else  fallback
-   *
-   * using equivalent:
-   *  cmd   meaning
-   *    0   hop count
-   */
+  // zprn_prio = priority
   uint8_t zprn_prio;
+#define ZPRN_ROUTEMOD_DELETE 0xFF
+#define ZPRN_CONNMGMT_OPEN   0x00
+#define ZPRN_CONNMGMT_CLOSE  0xFF
+#define ZPRN_RESULT_OK       0x00
+#define ZPRN_RESULT_FATERR   0xFF
 
   union {
     struct {

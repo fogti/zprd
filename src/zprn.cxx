@@ -17,8 +17,9 @@ bool zprn::valid() const noexcept {
     return false;
 
   switch(zprn_cmd) {
-    case 0:
-    case 1:
+    case ZPRN_ROUTEMOD:
+    case ZPRN_CONNMGMT:
+    case ZPRN_RESULT:
       return true;
 
     default:

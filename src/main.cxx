@@ -675,7 +675,7 @@ static void send_zprn_msg(const zprn &msg) {
   peers.erase(std::remove(peers.begin(), peers.end(), local_ip.s_addr), peers.end());
 
   // split horizon
-  if(msg.zprn_cmd == 0 && msg.zprn_prio != 255) {
+  if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
     const auto r = have_route(msg.zprn_un.route.dsta);
     if(r)
       peers.erase(std::remove(peers.begin(), peers.end(), r->get_router()), peers.end());
@@ -972,17 +972,17 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   if(is_zprn_packet(source_desc_c, buffer, nread)) {
     const auto d_zprn = reinterpret_cast<const struct zprn*>(buffer);
     switch(d_zprn->zprn_cmd) {
-      case 0:
+      case ZPRN_ROUTEMOD:
         {
           const auto dsta = d_zprn->zprn_un.route.dsta;
-          if(d_zprn->zprn_prio == 255) {
+          if(d_zprn->zprn_prio == ZPRN_ROUTEMOD_DELETE) {
             const auto r = have_route(dsta);
             // delete route
             if(r && r->del_router(srca.s_addr))
               printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
 
             zprn msg;
-            msg.zprn_cmd = 0;
+            msg.zprn_cmd = ZPRN_ROUTEMOD;
             msg.zprn_un.route.dsta = dsta;
             if(dsta == local_ip.s_addr) {
               // a route to us is deleted (and we know we are here)
@@ -1001,8 +1001,8 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
         }
         break;
 
-      case 1:
-        if(d_zprn->zprn_prio == 255) {
+      case ZPRN_CONNMGMT:
+        if(d_zprn->zprn_prio == ZPRN_CONNMGMT_CLOSE) {
           for(auto &r: routes)
             if(r.second.del_router(srca.s_addr))
               printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({r.first}), source_desc_c);
@@ -1074,8 +1074,8 @@ static void zprn_disconnect(int) {
   // notify our peers that we quit
   puts("ROUTER: disconnect from peers");
   zprn msg;
-  msg.zprn_cmd = 1;
-  msg.zprn_prio = 255;
+  msg.zprn_cmd = ZPRN_CONNMGMT;
+  msg.zprn_prio = ZPRN_CONNMGMT_CLOSE;
   msg.zprn_un.route.dsta = local_ip.s_addr;
   send_zprn_msg(msg);
   puts("QUIT");
@@ -1124,9 +1124,14 @@ int main(int argc, char *argv[]) {
   {
     // notify our peers that we are here
     zprn msg;
-    msg.zprn_cmd = 0;
-    msg.zprn_prio = 0;
     msg.zprn_un.route.dsta = local_ip.s_addr;
+
+    msg.zprn_cmd = ZPRN_CONNMGMT;
+    msg.zprn_prio = ZPRN_CONNMGMT_OPEN;
+    send_zprn_msg(msg);
+
+    msg.zprn_cmd = ZPRN_ROUTEMOD;
+    msg.zprn_prio = 0;
     send_zprn_msg(msg);
   }
 
@@ -1215,10 +1220,10 @@ int main(int argc, char *argv[]) {
       });
 
       zprn msg;
-      msg.zprn_cmd = 0;
+      msg.zprn_cmd = ZPRN_ROUTEMOD;
       msg.zprn_un.route.dsta = it->first;
       if(it->second.empty()) {
-        msg.zprn_prio = 255;
+        msg.zprn_prio = ZPRN_ROUTEMOD_DELETE;
         send_zprn_msg(msg);
 
         it = routes.erase(it);
