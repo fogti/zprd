@@ -1152,10 +1152,6 @@ int main(int argc, char *argv[]) {
     msg.zprn_prio = ZPRN_CONNMGMT_OPEN;
     send_zprn_msg(msg);
 
-    msg.zprn_cmd = ZPRN_ROUTEMOD;
-    msg.zprn_prio = 0;
-    send_zprn_msg(msg);
-
     // add route to ourselves to avoid sending two 'ZPRN add route' packets
     routes[local_ip.s_addr].add_router(local_ip.s_addr, 0);
   }
