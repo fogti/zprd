@@ -1070,7 +1070,7 @@ static void print_routing_table(int) {
   fflush(stdout);
 }
 
-static void zprn_disconnect(int) {
+static void zprn_disconnect() {
   // notify our peers that we quit
   puts("ROUTER: disconnect from peers");
   zprn msg;
@@ -1135,8 +1135,7 @@ int main(int argc, char *argv[]) {
     send_zprn_msg(msg);
   }
 
-  my_signal(SIGINT,  zprn_disconnect);
-  my_signal(SIGTERM, zprn_disconnect);
+  atexit(zprn_disconnect);
 
   while(1) {
     { // use select() to handle two descriptors at once
