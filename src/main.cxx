@@ -1242,7 +1242,7 @@ int main(int argc, char *argv[]) {
       msg.zprn_cmd = ZPRN_ROUTEMOD;
       msg.zprn_un.route.dsta = it->first;
 
-      const auto &ise = it->second;
+      auto &ise = it->second;
       if(ise.empty() || ise._fresh_add) {
         ise._fresh_add = false;
         msg.zprn_prio = (ise.empty()
