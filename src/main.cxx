@@ -1230,7 +1230,6 @@ int main(int argc, char *argv[]) {
       }
 
       ++it;
-      continue;
     }
 
     // cleanup routes, needs to be done after del_router calls
@@ -1242,20 +1241,18 @@ int main(int argc, char *argv[]) {
       zprn msg;
       msg.zprn_cmd = ZPRN_ROUTEMOD;
       msg.zprn_un.route.dsta = it->first;
-      if(it->second.empty()) {
-        msg.zprn_prio = ZPRN_ROUTEMOD_DELETE;
+
+      const auto &ise = it->second;
+      if(ise.empty() || ise._fresh_add) {
+        ise._fresh_add = false;
+        msg.zprn_prio = (ise.empty()
+          ? ZPRN_ROUTEMOD_DELETE
+          : ise._routers.front().hops);
         send_zprn_msg(msg);
-
-        it = routes.erase(it);
-      } else {
-        if(it->second._fresh_add) {
-          it->second._fresh_add = false;
-          msg.zprn_prio = it->second._routers.front().hops;
-          send_zprn_msg(msg);
-        }
-
-        ++it;
       }
+
+      if(ise.empty()) it = routes.erase(it);
+      else ++it;
     }
 
     // flush output
