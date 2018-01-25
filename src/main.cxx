@@ -5,7 +5,7 @@
  * interfaces and UDP.
  *
  * (C) 2010 Davide Brini.
- * (C) 2017 Erik Zscheile.
+ * (C) 2017 - 2018 Erik Zscheile.
  *
  * License: GPL-3
  *
@@ -692,7 +692,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
 
   // check this late (don't register discarded packets)
   // use case : two ways to one destination, merge at destination (or before)
-  if(RecentPkts_append(in_hashsum(reinterpret_cast<const uint8_t*>(buffer), buflen))) {
+  if(RecentPkts_append(reinterpret_cast<const uint8_t*>(buffer), buflen)) {
     printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
     return {};
   }

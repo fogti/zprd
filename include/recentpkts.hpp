@@ -1,6 +1,6 @@
 /** recentpkts.cxx loop detection using round-robin alike database of recent
  *                 packet ids
- * (C) 2017 Erik Zscheile
+ * (C) 2017 - 2018 Erik Zscheile
  * License: GPL-3
  **/
 
@@ -14,9 +14,10 @@
  * refreshs packet if already known
  * drops all expired packets
  *
- * @param id   the packet hash
+ * @param ptr    pointer to packet
+ * @param nbytes size of packet
  * @ret        is already known (true -> DUP!)
  **/
-bool RecentPkts_append(const uint64_t id);
+bool RecentPkts_append(const uint8_t *ptr, uint16_t nbytes);
 
 #endif
