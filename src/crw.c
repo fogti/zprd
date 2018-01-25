@@ -76,16 +76,6 @@ int cwrite(const int fd, const char *buf, const int n) {
   );
 }
 
-int read_n(const int fd, char *buf, const int n) {
-  for(int left = n; left > 0;) {
-    const int nread = cread(fd, buf, left);
-    if(!nread) return 0;
-    left -= nread;
-    buf += nread;
-  }
-  return n;
-}
-
 // additional functions needed for work with UDP
 
 int crecvfrom(const int fd, char *buf, const int n, struct sockaddr_in *addr) {
