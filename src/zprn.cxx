@@ -1,5 +1,5 @@
 /**
- * resolve.cxx
+ * zprn.cxx
  * (C) 2017 Erik Zscheile.
  * License: GPL-3
  **/

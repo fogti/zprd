@@ -6,7 +6,7 @@
 
 #ifndef RECENTPKTS_HPP
 # define RECENTPKTS_HPP 1
-# include <stdint.h>
+# include <inttypes.h>
 
 /** RecentPkts_append:
  * append a packet to the recent packet database if its not already known

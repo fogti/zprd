@@ -26,10 +26,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include <net/if.h>
-#include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -40,8 +38,6 @@
 #include <errno.h>
 
 // C++
-#include <string>
-#include <vector>
 #include <forward_list>
 #include <set>
 #include <unordered_map>
@@ -53,7 +49,9 @@
 #include "cksum.h"
 #include "crw.h"
 #include "recentpkts.hpp"
+#include "remote_peer.hpp"
 #include "resolve.hpp"
+#include "zprd_conf.hpp"
 #include "zprn.hpp"
 #include "zsig.h"
 #include "main.hpp"
@@ -63,39 +61,14 @@
 
 using namespace std;
 
+zprd_conf_t zprd_conf;
+
 /** file descriptors
  *
  * local_fd  = the tun device
  * server_fd = the server udp socket
  **/
 static int local_fd, server_fd;
-
-// data port
-static uint16_t data_port;
-
-// timeout in seconds after which remotes are silently discarded
-static time_t remote_timeout;
-
-struct remote_peer_t {
-  time_t  seen;
-  ssize_t cent; // config entry
-
-  remote_peer_t() noexcept
-    : seen(time(0)), cent(-1) { }
-
-  remote_peer_t(const size_t cfgent) noexcept
-    : seen(time(0)), cent(static_cast<ssize_t>(cfgent)) { }
-
-  void refresh() noexcept {
-    seen = time(0);
-  }
-
-  bool outdated() const noexcept {
-    return (time(0) - seen) >= remote_timeout;
-  }
-
-  const char *cfgent_name() const;
-};
 
 static unordered_map<uint32_t, remote_peer_t> remotes;
 
@@ -176,7 +149,7 @@ struct route_via_t {
   void cleanup(const Fn f) {
     _routers.remove_if(
       [f](const via_router_t &a) {
-        if((time(0) - a.seen) < (2 * remote_timeout))
+        if((time(0) - a.seen) < (2 * zprd_conf.remote_timeout))
           return false;
 
         f(a.addr);
@@ -307,29 +280,6 @@ static unordered_map<uint32_t, negative_route> neg_routes;
 static in_addr local_ip, local_netmask;
 static bool have_local_ip;
 
-struct local_route {
-  uint32_t dst;
-  uint32_t nmk;
-
-  bool match(const uint32_t a) const noexcept {
-    return (dst & nmk) == (a & nmk);
-  }
-};
-
-struct {
-  string iface;
-  vector<string> remotes;
-  vector<local_route> locals;
-} zprd_conf;
-
-const char *remote_peer_t::cfgent_name() const {
-  if(cent < 0) return "-";
-  const auto &r = zprd_conf.remotes;
-  const auto ce = static_cast<size_t>(cent);
-  if(ce >= r.size()) return "####";
-  return r[ce].c_str();
-}
-
 static void init_all(const string &confpath) {
   static const auto runcmd = [](const string &cmd) {
     if(system(cmd.c_str())) {
@@ -363,16 +313,14 @@ static void init_all(const string &confpath) {
     }
 
     // DEFAULTS
-    data_port      = 45940; // P45940
-    remote_timeout = 600;   // T600   = 10 min
-    have_local_ip  = false;
+    zprd_conf.data_port      = 45940; // P45940
+    zprd_conf.remote_timeout = 600;   // T600   = 10 min
+    have_local_ip = false;
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
 
-    string addr_stmt;
-
-    string line;
+    string addr_stmt, line;
     while(getline(in, line)) {
       if(line.empty()) continue;
       const string arg = line.substr(1);
@@ -388,29 +336,8 @@ static void init_all(const string &confpath) {
           zprd_conf.iface = arg;
           break;
 
-        case 'L':
-          {
-            const size_t marker = arg.find('/');
-            const string ip = arg.substr(0, marker);
-            string cidrsf = "32";
-            if(marker != string::npos)
-              cidrsf = arg.substr(marker + 1);
-
-            local_route tmp;
-            tmp.nmk = cidr_to_netmask(stoi(cidrsf));
-
-            struct in_addr lrdst;
-            if(!resolve_hostname(ip.c_str(), lrdst))
-              fprintf(stderr, "CONFIG WARNING: invalid 'L' statement: '%s'\n", line.c_str());
-            else {
-              tmp.dst = lrdst.s_addr;
-              zprd_conf.locals.emplace_back(tmp);
-            }
-          }
-          break;
-
         case 'P':
-          data_port = stoi(arg);
+          zprd_conf.data_port = stoi(arg);
           break;
 
         case 'R':
@@ -418,7 +345,7 @@ static void init_all(const string &confpath) {
           break;
 
         case 'T':
-          remote_timeout = stoi(arg);
+          zprd_conf.remote_timeout = stoi(arg);
           break;
 
         case 'U':
@@ -530,7 +457,7 @@ static void init_all(const string &confpath) {
   memset(&local, 0, sizeof(local));
   local.sin_family = AF_INET;
   local.sin_addr.s_addr = htonl(INADDR_ANY);
-  local.sin_port = htons(data_port);
+  local.sin_port = htons(zprd_conf.data_port);
   if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&local), sizeof(local)) < 0) {
     perror("bind()");
     exit(1);
@@ -566,7 +493,7 @@ int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
   memset(&dsta, 0, sizeof(dsta));
   dsta.sin_family = AF_INET;
   dsta.sin_addr.s_addr = ent;
-  dsta.sin_port = htons(data_port);
+  dsta.sin_port = htons(zprd_conf.data_port);
   return csendto(server_fd, buffer, buflen, &dsta);
 }
 
@@ -814,16 +741,8 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
     ret.erase(source_peer_ip);
 
     if(source_peer_ip != local_ip.s_addr && !broadcast_is_dst && ip_dst != local_ip) {
-      // handle the case when one of my local routes is the destination
-      bool rm_local = true;
-      for(auto &&i : zprd_conf.locals)
-        if(i.match(ip_dst.s_addr)) {
-          rm_local = false;
-          break;
-        }
-
       // catch bouncing packets in *local iface* network earlier
-      if(rm_local) ret.erase(local_ip.s_addr);
+      ret.erase(local_ip.s_addr);
     }
   }
 
