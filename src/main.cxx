@@ -677,9 +677,6 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
 
   const auto &ip_src          = h_ip->ip_src;
   const auto &ip_dst          = h_ip->ip_dst;
-  const bool is_unknown_src   = is_broadcast_addr(ip_src);
-  const bool broadcast_is_dst = is_broadcast_addr(ip_dst);
-  const bool allow_icmp_em    = !is_unknown_src && !broadcast_is_dst && !is_icmp_errmsg;
 
   // am I an endpoint
   const bool iam_ep = have_local_ip && (source_peer_ip == local_ip.s_addr || ip_dst == local_ip);
@@ -688,7 +685,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
     // ttl is too low -> DROP
     printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
-    if(allow_icmp_em)
+    if(!is_icmp_errmsg)
       send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
     return {};
   }
@@ -708,23 +705,21 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
   h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
 
   // update routes
-  if(!is_unknown_src && routes[ip_src.s_addr].add_router(
+  if(routes[ip_src.s_addr].add_router(
       source_peer_ip,
       (have_local_ip && local_ip.s_addr == ip_src.s_addr) ? 0 : (MAXTTL - h_ip->ip_ttl)
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   // is a broadcast needed
-  bool is_broadcast = broadcast_is_dst;
+  bool is_broadcast = false;
 
-  if(!is_broadcast) {
-    if(have_local_ip && ip_dst == local_ip) {
-      if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
-        printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
-    } else if(routes.find(ip_dst.s_addr) == routes.end()) {
-      printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-      is_broadcast = true;
-    }
+  if(have_local_ip && ip_dst == local_ip) {
+    if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
+      printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
+  } else if(routes.find(ip_dst.s_addr) == routes.end()) {
+    printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
+    is_broadcast = true;
   }
 
   // get route to destination
@@ -740,7 +735,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
   { // split horizon
     ret.erase(source_peer_ip);
 
-    if(source_peer_ip != local_ip.s_addr && !broadcast_is_dst && ip_dst != local_ip) {
+    if(source_peer_ip != local_ip.s_addr && ip_dst != local_ip) {
       // catch bouncing packets in *local iface* network earlier
       ret.erase(local_ip.s_addr);
     }
@@ -748,7 +743,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
-    if(allow_icmp_em) {
+    if(!is_icmp_errmsg) {
       if(have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
         send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
       else
@@ -803,7 +798,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
             if(!r->empty()) ret.clear();
           }
         }
-      } else if(!is_unknown_src && !is_broadcast) {
+      } else if(!is_broadcast) {
         /** evaluate ping packets to determine the latency of this route
          *  echoreply : source and destination are swapped
          **/
@@ -1109,7 +1104,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
+    const auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
       // discard route
       printf("ROUTER: delete route to %s ", inet_ntoa({addr}));
       const auto d = get_remote_desc(router);
