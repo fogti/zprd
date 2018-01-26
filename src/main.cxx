@@ -725,8 +725,8 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
   // get route to destination
   unordered_set<uint32_t> ret;
   if(is_broadcast) {
-    for(auto &&i : remotes)
-      ret.emplace(i.first);
+    ret.reserve(remotes.size() + 1);
+    for(const auto &i : remotes) ret.emplace(i.first);
     ret.emplace(local_ip.s_addr);
   } else {
     ret.emplace(routes[ip_dst.s_addr].get_router());
