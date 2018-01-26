@@ -39,10 +39,14 @@
 
 // C++
 #include <forward_list>
+#include <tuple>
 #include <unordered_set>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
+
+// 3rdparty
+#include <ThreadPool.h>
 
 // own parts
 #include "addr.hpp"
@@ -70,6 +74,7 @@ zprd_conf_t zprd_conf;
  **/
 static int local_fd, server_fd;
 
+static ThreadPool threadpool(thread::hardware_concurrency() + 1);
 static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t {
@@ -160,12 +165,7 @@ struct route_via_t {
     _routers.sort(
       // priority high to low: hop count > latency > seen time
       [](const via_router_t &a, const via_router_t &b) {
-        if(a.hops    < b.hops) return true;
-        if(a.hops    > b.hops) return false;
-        if(a.latency < b.latency) return true;
-        if(a.latency > b.latency) return false;
-        if(a.seen    > b.seen) return true;
-        return false;
+        return tie(a.hops, a.latency, b.seen) < tie(b.hops, b.latency, a.seen);
       }
     );
   }
@@ -254,7 +254,7 @@ struct route_via_t {
     _routers.remove_if(
       [router, &ret](const via_router_t &a) noexcept -> bool {
         const bool tmp = (router == a.addr);
-        ret = ret || tmp;
+        ret |= tmp;
         return tmp;
       }
     );
@@ -582,7 +582,9 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   }
 
   // calculate ip checksum
-  h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+  auto fut_ip_sum = threadpool.enqueue([h_ip] {
+    h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+  });
 
   // setup outer header
   set_ip_df(h_ip);
@@ -590,6 +592,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
     perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
 
+  fut_ip_sum.wait();
   send_packet(source_ip, buffer, buflen);
 }
 
@@ -600,34 +603,39 @@ static void apply_ping_cache_match(const ping_cache_match &m) {
 }
 
 static void send_zprn_msg(const zprn &msg) {
+  auto fut_stos = threadpool.enqueue([] {
+    // setup outer header
+    const uint8_t tos = 0;
+    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+  });
+
   vector<uint32_t> peers;
   for(auto &&i: remotes)
     peers.emplace_back(i.first);
 
+  const auto rem_peer = [&peers](const uint32_t peer) {
+    peers.erase(std::remove(peers.begin(), peers.end(), peer), peers.end());
+  };
+
   // filter local tun interface
-  peers.erase(std::remove(peers.begin(), peers.end(), local_ip.s_addr), peers.end());
+  rem_peer(local_ip.s_addr);
 
   // split horizon
   if(msg.zprn_cmd == ZPRN_ROUTEMOD) {
     if(msg.zprn_prio == ZPRN_ROUTEMOD_DELETE) {
       const auto it = neg_routes.find(msg.zprn_un.route.dsta);
       if(it != neg_routes.end()) {
-        peers.erase(std::remove(peers.begin(), peers.end(), it->second.former_router), peers.end());
+        rem_peer(it->second.former_router);
         neg_routes.erase(it);
       }
     } else {
       const auto r = have_route(msg.zprn_un.route.dsta);
-      if(r)
-        peers.erase(std::remove(peers.begin(), peers.end(), r->get_router()), peers.end());
+      if(r) rem_peer(r->get_router());
     }
   }
 
-  { // setup outer header
-    const uint8_t tos = 0;
-    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
-  }
-
+  fut_stos.wait();
   msg.send(peers);
 }
 
@@ -648,7 +656,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
-  const uint16_t pkid      = ntohs(h_ip->ip_id);
+  const auto pkid          = ntohs(h_ip->ip_id);
   const bool is_icmp       = (h_ip->ip_p == IPPROTO_ICMP);
 
   if(is_icmp && (sizeof(struct ip) + sizeof(struct icmphdr)) > buflen) {
@@ -660,7 +668,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
    *   reason : an echo packet could be used to establish an route without interference on application protos
    */
   const bool is_icmp_errmsg = is_icmp
-    && ([buffer]() -> bool {
+    && ([buffer] {
       const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
       switch(h_icmp->type) {
         case ICMP_ECHO:      // = 8
@@ -675,8 +683,8 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
       }
     })();
 
-  const auto &ip_src          = h_ip->ip_src;
-  const auto &ip_dst          = h_ip->ip_dst;
+  const auto &ip_src = h_ip->ip_src;
+  const auto &ip_dst = h_ip->ip_dst;
 
   // am I an endpoint
   const bool iam_ep = have_local_ip && (source_peer_ip == local_ip.s_addr || ip_dst == local_ip);
@@ -702,7 +710,9 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
 
   // update checksum (because we changed the header)
   h_ip->ip_sum = 0;
-  h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+  auto fut_ip_sum = threadpool.enqueue([h_ip] {
+    h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+  });
 
   // update routes
   if(routes[ip_src.s_addr].add_router(
@@ -735,10 +745,12 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
   // split horizon
   ret.erase(source_peer_ip);
 
-  if(source_peer_ip != local_ip.s_addr && ip_dst != local_ip) {
-    // catch bouncing packets in *local iface* network earlier
+  // catch bouncing packets in *local iface* network earlier
+  if(source_peer_ip != local_ip.s_addr && ip_dst != local_ip)
     ret.erase(local_ip.s_addr);
-  }
+
+  // fetch chksum before possible send_icmp_msg
+  fut_ip_sum.wait();
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
@@ -872,13 +884,7 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
  * @ret           is valid
  **/
 static bool is_zprn_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) {
-  if(sizeof(struct zprn) > len)
-    return false;
-
-  if(!(reinterpret_cast<const struct zprn*>(buffer)->valid()))
-    return false;
-
-  return true;
+  return (sizeof(struct zprn) <= len) && reinterpret_cast<const zprn*>(buffer)->valid();
 }
 
 /** read_packet
