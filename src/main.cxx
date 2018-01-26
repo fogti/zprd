@@ -39,7 +39,7 @@
 
 // C++
 #include <forward_list>
-#include <set>
+#include <unordered_set>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
@@ -478,7 +478,7 @@ static string get_remote_desc(const uint32_t addr) {
 }
 
 /** send_packet:
- * handles the sending of packets to a remote or local (identified by a)
+ * handles the sending of packets to a remote or local (identified by ent)
  *
  * @param ent     the ip of the destination
  * @param buffer  the buffer
@@ -644,7 +644,7 @@ static void send_zprn_msg(const zprn &msg) {
  *
  * @ret             the ips of the destination sockets
  **/
-static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
+static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
@@ -723,7 +723,7 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
   }
 
   // get route to destination
-  set<uint32_t> ret;
+  unordered_set<uint32_t> ret;
   if(is_broadcast) {
     for(auto &&i : remotes)
       ret.emplace(i.first);
@@ -732,13 +732,12 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
     ret.emplace(routes[ip_dst.s_addr].get_router());
   }
 
-  { // split horizon
-    ret.erase(source_peer_ip);
+  // split horizon
+  ret.erase(source_peer_ip);
 
-    if(source_peer_ip != local_ip.s_addr && ip_dst != local_ip) {
-      // catch bouncing packets in *local iface* network earlier
-      ret.erase(local_ip.s_addr);
-    }
+  if(source_peer_ip != local_ip.s_addr && ip_dst != local_ip) {
+    // catch bouncing packets in *local iface* network earlier
+    ret.erase(local_ip.s_addr);
   }
 
   if(ret.empty()) {
@@ -831,7 +830,8 @@ static set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], 
 
 static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
   remotes[sin_addr.s_addr].refresh();
-  for(auto &&dest : route_packet(sin_addr.s_addr, buffer, len))
+  const auto dsts = route_packet(sin_addr.s_addr, buffer, len);
+  for(auto &&dest : dsts)
     send_packet(dest, buffer, len);
 }
 
@@ -1112,7 +1112,7 @@ int main(int argc, char *argv[]) {
     };
 
     vector<uint32_t> discard_remotes;
-    set<size_t> found_remotes;
+    unordered_set<size_t> found_remotes;
     unordered_map<uint32_t, uint32_t> tr_remotes;
 
     for(auto it = remotes.begin(); it != remotes.end();) {

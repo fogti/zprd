@@ -10,7 +10,8 @@
 
 static std::unordered_map<uint64_t, uint8_t> _pkts;
 
-static bool RecentPkts_append(const uint64_t id) {
+bool RecentPkts_append(const uint8_t *ptr, uint16_t nbytes) {
+  const uint64_t id = in_hashsum(ptr, nbytes);
   bool ret = false;
 
   // drop expired pkts + aging + found?
@@ -31,8 +32,4 @@ static bool RecentPkts_append(const uint64_t id) {
   _pkts[id] = 32;
 
   return ret;
-}
-
-bool RecentPkts_append(const uint8_t *ptr, uint16_t nbytes) {
-  return RecentPkts_append(in_hashsum(ptr, nbytes));
 }
