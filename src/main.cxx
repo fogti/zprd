@@ -746,8 +746,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
   ret.erase(source_peer_ip);
 
   // catch bouncing packets in *local iface* network earlier
-  if(source_peer_ip != local_ip.s_addr && ip_dst != local_ip)
-    ret.erase(local_ip.s_addr);
+  if(!iam_ep) ret.erase(local_ip.s_addr);
 
   // fetch chksum before possible send_icmp_msg
   fut_ip_sum.wait();
