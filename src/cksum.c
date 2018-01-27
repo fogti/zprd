@@ -15,9 +15,8 @@ uint16_t in_cksum(const uint16_t *ptr, int nbytes) {
   if(nbytes)
     sum += * ((const uint8_t *) ptr);
 
-  while(sum >> 16)
-    sum = (sum >> 16) + (sum & 0xffff);
-
+  sum = (sum >> 16) + (sum & 0xffff);
+  sum += (sum >> 16);
   return ~sum;
 }
 
