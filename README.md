@@ -1,5 +1,7 @@
 # zprd
 
+[![Build Status](https://travis-ci.org/zserik/zprd.svg?branch=master)](https://travis-ci.org/zserik/zprd)
+
 ## USAGE
 
 ZPRD is a simple, unencrypted IPv4 tunnel tool,
