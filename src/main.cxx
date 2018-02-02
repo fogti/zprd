@@ -44,6 +44,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
+#include <type_traits>
 
 // 3rdparty
 #include <ThreadPool.h>
@@ -131,7 +132,7 @@ class ping_cache_t {
 
   ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq, const uint8_t ttl) {
     if(src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
-      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, _ttl - ttl + 1, true };
+      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_ttl - ttl + 1), true };
       clear();
       return ret;
     } else {
@@ -653,6 +654,8 @@ static void send_zprn_msg(const zprn &msg) {
  * @ret             the ips of the destination sockets
  **/
 static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
+  // ret_nul: fix errors when compiling with clang
+  static const unordered_set<uint32_t> ret_nul;
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
@@ -661,7 +664,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
 
   if(is_icmp && (sizeof(struct ip) + sizeof(struct icmphdr)) > buflen) {
     printf("ROUTER: drop packet %u (too small icmp packet; size = %u) from %s\n", pkid, buflen, source_desc_c);
-    return {};
+    return ret_nul;
   }
 
   /* is_icmp_errmsg : flag if packet is an icmp error message
@@ -695,14 +698,14 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
     printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
     if(!is_icmp_errmsg)
       send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
-    return {};
+    return ret_nul;
   }
 
   // check this late (don't register discarded packets)
   // use case : two ways to one destination, merge at destination (or before)
   if(RecentPkts_append(reinterpret_cast<const uint8_t*>(buffer), buflen)) {
     printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
-    return {};
+    return ret_nul;
   }
 
   // decrement ttl
