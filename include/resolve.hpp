@@ -9,6 +9,6 @@
  * @param remote    (in/out) the remote socket address
  * @ret             DNS ok marker
  **/
-bool resolve_hostname(const char * const hostname, struct in_addr &remote);
+bool resolve_hostname(const char * const hostname, struct in_addr &remote) noexcept;
 
 #endif

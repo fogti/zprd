@@ -1,26 +1,17 @@
 /**
  * resolve.cxx
- * (C) 2017 Erik Zscheile.
+ * (C) 2018 Erik Zscheile.
  * License: GPL-3
  **/
 
 #define __USE_MISC 1
 #include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <net/if.h>
-#include <netinet/in.h>
+#include <string.h> // memset
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <fcntl.h>
-#include <arpa/inet.h>
-#include <sys/select.h>
-#include <sys/time.h>
-#include <netdb.h>
-#include <errno.h>
+#include <netdb.h> // getaddrinfo
 #include "resolve.hpp"
 
-bool resolve_hostname(const char * const hostname, struct in_addr &remote) {
+bool resolve_hostname(const char * const hostname, struct in_addr &remote) noexcept {
   struct addrinfo hints, *servinfo;
 
   // setup hints

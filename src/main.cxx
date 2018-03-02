@@ -35,7 +35,6 @@
 #include <sys/select.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
-#include <errno.h>
 
 // C++
 #include <forward_list>
@@ -45,7 +44,6 @@
 #include <fstream>
 #include <algorithm>
 #include <utility>
-#include <type_traits>
 
 // 3rdparty
 #include <ThreadPool.h>

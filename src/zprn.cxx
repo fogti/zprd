@@ -1,6 +1,6 @@
 /**
  * zprn.cxx
- * (C) 2017 Erik Zscheile.
+ * (C) 2018 Erik Zscheile.
  * License: GPL-3
  **/
 
@@ -8,7 +8,7 @@
 #include "main.hpp"
 #include "zprn.hpp"
 
-zprn::zprn() : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0) {
+zprn::zprn() noexcept : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0) {
   memset(&zprn_un, 0, sizeof(zprn_un));
 }
 

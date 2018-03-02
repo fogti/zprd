@@ -27,7 +27,7 @@ struct zprn {
     } route;
   } zprn_un;
 
-  zprn();
+  zprn() noexcept;
   bool valid() const noexcept;
   void send(const std::vector<uint32_t> &peers) const noexcept;
 };
