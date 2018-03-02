@@ -44,6 +44,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
+#include <utility>
 #include <type_traits>
 
 // 3rdparty
@@ -75,7 +76,8 @@ zprd_conf_t zprd_conf;
  **/
 static int local_fd, server_fd;
 
-static ThreadPool threadpool(thread::hardware_concurrency() + 1);
+// make sure that there are at least 2 worker threads
+static ThreadPool threadpool(std::max((unsigned) 2, (unsigned) thread::hardware_concurrency() + 1));
 static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t final {
@@ -148,12 +150,11 @@ struct route_via_t final {
 
   // deletes all outdates routers and sort routers
   template<typename Fn>
-  void cleanup(const Fn f) {
+  void cleanup(const Fn &f) {
+    const auto ct = time(0) - 2 * zprd_conf.remote_timeout;
     _routers.remove_if(
-      [f](const via_router_t &a) {
-        if((time(0) - a.seen) < (2 * zprd_conf.remote_timeout))
-          return false;
-
+      [ct,f](const via_router_t &a) {
+        if(ct < a.seen) return false;
         f(a.addr);
         return true;
       }
@@ -161,7 +162,7 @@ struct route_via_t final {
 
     _routers.sort(
       // priority high to low: hop count > latency > seen time
-      [](const via_router_t &a, const via_router_t &b) {
+      [](const via_router_t &a, const via_router_t &b) noexcept {
         return tie(a.hops, a.latency, b.seen) < tie(b.hops, b.latency, a.seen);
       }
     );
@@ -197,13 +198,12 @@ struct route_via_t final {
   }
 
   void update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
-    const auto it_e = _routers.end();
-    const auto it = find_if(_routers.begin(), it_e,
+    const auto it = find_if(_routers.begin(), _routers.end(),
       [router](const via_router_t &i) noexcept {
         return i.addr == router;
       }
     );
-    if(it == it_e) return;
+    if(it == _routers.end()) return;
     it->seen = time(0);
     it->hops = hops;
     it->latency = latency;
@@ -464,14 +464,16 @@ static void init_all(const string &confpath) {
 
 static route_via_t* have_route(const uint32_t dsta) noexcept {
   const auto it = routes.find(dsta);
-  if(it == routes.end() || it->second.empty()) return 0;
-  return &(it->second);
+  return (
+    (it == routes.end() || it->second.empty())
+      ? 0 : &(it->second)
+  );
 }
 
 void ping_cache_match::apply() const noexcept {
-  if(!match) return;
-  const auto r = have_route(dst);
-  if(r) r->update_router(router, hops, diff);
+  if(match)
+    if(const auto r = have_route(dst))
+      r->update_router(router, hops, diff);
 }
 
 // get_remote_desc: returns a description string of socket ip
@@ -550,6 +552,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   h_ip->ip_sum = 0;
 
   h_icmp->code = 0;
+  h_icmp->checksum = 0;
 
   switch(msg) {
     case ZICMPM_TTL:
@@ -573,8 +576,9 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   }
 
   // calculate icmp checksum
-  h_icmp->checksum = 0;
-  h_icmp->checksum = in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr));
+  auto fut_icmp_sum = threadpool.enqueue([h_icmp] {
+    return in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr));
+  });
 
   // setup payload = orig ip header
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
@@ -587,7 +591,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 
   // calculate ip checksum
   auto fut_ip_sum = threadpool.enqueue([h_ip] {
-    h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+    return in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
   });
 
   // setup outer header
@@ -596,7 +600,8 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
     perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
 
-  fut_ip_sum.wait();
+  h_icmp->checksum = fut_icmp_sum.get();
+  h_ip->ip_sum     = fut_ip_sum.get();
   send_packet(source_ip, buffer, buflen);
 }
 
@@ -627,9 +632,8 @@ static void send_zprn_msg(const zprn &msg) {
         rem_peer(it->second.former_router);
         neg_routes.erase(it);
       }
-    } else {
-      const auto r = have_route(msg.zprn_un.route.dsta);
-      if(r) rem_peer(r->get_router());
+    } else if(const auto r = have_route(msg.zprn_un.route.dsta)) {
+      rem_peer(r->get_router());
     }
   }
 
@@ -639,7 +643,7 @@ static void send_zprn_msg(const zprn &msg) {
 
 /** route_packet:
  *
- * decide which fd is the destination,
+ * decide which socket is the destination,
  * based on the destination ip and the routing table,
  * decrement the ttl
  *
@@ -698,20 +702,21 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
     return ret_nul;
   }
 
-  // check this late (don't register discarded packets)
-  // use case : two ways to one destination, merge at destination (or before)
-  if(RecentPkts_append(reinterpret_cast<const uint8_t*>(buffer), buflen)) {
-    printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
-    return ret_nul;
-  }
-
   // decrement ttl
   if(!iam_ep) --(h_ip->ip_ttl);
 
-  // update checksum (because we changed the header)
+  // check this late (don't register discarded packets)
+  // use case : two ways to one destination, merge at destination (or before)
+  // check this parallel, as most packets aren't DUPs
+  // NOTE: make sure that no changes are done to buffer
   h_ip->ip_sum = 0;
+  auto fut_rctpka = threadpool.enqueue([buffer, buflen] {
+    return RecentPkts_append(reinterpret_cast<const uint8_t*>(buffer), buflen);
+  });
+
+  // update checksum (because we changed the header)
   auto fut_ip_sum = threadpool.enqueue([h_ip] {
-    h_ip->ip_sum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
+    return in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
   });
 
   // update routes
@@ -732,6 +737,11 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
     is_broadcast = true;
   }
 
+  if(fut_rctpka.get()) {
+    printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
+    return ret_nul;
+  }
+
   // get route to destination
   unordered_set<uint32_t> ret;
   if(is_broadcast) {
@@ -749,15 +759,20 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
   if(!iam_ep) ret.erase(local_ip.s_addr);
 
   // fetch chksum before possible send_icmp_msg
-  fut_ip_sum.wait();
+  h_ip->ip_sum = fut_ip_sum.get();
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(!is_icmp_errmsg) {
-      if(have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
-        send_icmp_msg(ZICMPM_UNREACH,     h_ip, source_peer_ip);
-      else
-        send_icmp_msg(ZICMPM_UNREACH_NET, h_ip, source_peer_ip);
+      // we need at least 2 threads for this
+      auto fut_send = threadpool.enqueue([=] {
+        const zprd_icmpe msg = (
+          (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
+            ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
+        );
+
+        send_icmp_msg(msg, h_ip, source_peer_ip);
+      });
 
       // to prevent routing loops
       // drop routing table entry, if there is any
@@ -768,6 +783,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
         const auto d = get_remote_desc(router);
         printf("%s (invalid)\n", d.c_str());
       }
+      fut_send.wait();
     }
   } else {
     if(is_icmp) {
@@ -794,10 +810,10 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
         }
         if(rm_route) {
           // drop routing table entry, if there is any
-          const auto h_ip2 = reinterpret_cast<const struct ip*>(buffer + sizeof(struct ip) + sizeof(struct icmphdr));
-          const auto target = h_ip2->ip_dst; // original destination
-          const auto r = have_route(target.s_addr);
-          if(r) {
+          //  target = original destination
+          const auto target = reinterpret_cast<const struct ip*>(buffer +
+                              sizeof(struct ip) + sizeof(struct icmphdr))->ip_dst;
+          if(const auto r = have_route(target.s_addr)) {
             if(r->del_router(source_peer_ip)) {
               // routing table entry dropped
               printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
@@ -861,8 +877,7 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
     return false;
   }
 
-  const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
-  if(dsum) {
+  if(const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip))) {
     printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
            h_ip->ip_sum, dsum, source_desc_c);
     return false;
@@ -878,7 +893,7 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
  * @param len     the length of the packet
  * @ret           is valid
  **/
-static bool is_zprn_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) {
+inline bool is_zprn_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) noexcept {
   return (sizeof(struct zprn) <= len) && reinterpret_cast<const zprn*>(buffer)->valid();
 }
 
@@ -945,8 +960,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
             }
 
           const auto dsta = d_zprn->zprn_un.route.dsta;
-          const auto r = have_route(dsta);
-          if(r) {
+          if(const auto r = have_route(dsta)) {
             r->_routers.clear();
             printf("ROUTER: delete route to %s (notified)\n", inet_ntoa({dsta}));
           }
@@ -1053,23 +1067,23 @@ int main(int argc, char *argv[]) {
     }
 
     init_all(confpath);
-    my_signal(SIGUSR1, print_routing_table);
-    fflush(stdout);
-    fflush(stderr);
   }
+
+  my_signal(SIGUSR1, print_routing_table);
+  fflush(stdout);
+  fflush(stderr);
 
   {
     // notify our peers that we are here
     zprn msg;
-    msg.zprn_un.route.dsta = local_ip.s_addr;
-
     msg.zprn_cmd = ZPRN_CONNMGMT;
     msg.zprn_prio = ZPRN_CONNMGMT_OPEN;
+    msg.zprn_un.route.dsta = local_ip.s_addr;
     send_zprn_msg(msg);
-
-    // add route to ourselves to avoid sending two 'ZPRN add route' packets
-    routes[local_ip.s_addr].add_router(local_ip.s_addr, 0);
   }
+
+  // add route to ourselves to avoid sending two 'ZPRN add route' packets
+  routes[local_ip.s_addr].add_router(local_ip.s_addr, 0);
 
   atexit(zprn_disconnect);
 
@@ -1079,9 +1093,8 @@ int main(int argc, char *argv[]) {
       FD_ZERO(&rd_set);
       FD_SET(local_fd, &rd_set);
       FD_SET(server_fd, &rd_set);
-      const int maxfd = (server_fd > local_fd) ? server_fd : local_fd;
 
-      if(select(maxfd + 1, &rd_set, 0, 0, 0) < 0) {
+      if(select(std::max(local_fd, server_fd) + 1, &rd_set, 0, 0, 0) < 0) {
         if(errno == EINTR) continue;
         perror("select()");
         exit(1);
@@ -1130,8 +1143,11 @@ int main(int argc, char *argv[]) {
         struct in_addr remote;
         if(resolve_hostname(it->second.cfgent_name(), remote)) {
           it->second.refresh();
-          if(remote.s_addr != it->first)
+          if(remote.s_addr != it->first) {
             tr_remotes[it->first] = remote.s_addr;
+            for(auto &r: routes)
+              r.second.replace_router(it->first, remote.s_addr);
+          }
           discard = false;
         }
       }
@@ -1153,13 +1169,13 @@ int main(int argc, char *argv[]) {
         del_route_msg(it->first, router);
       });
 
-      zprn msg;
-      msg.zprn_cmd = ZPRN_ROUTEMOD;
-      msg.zprn_un.route.dsta = it->first;
-
       auto &ise = it->second;
       if(ise.empty() || ise._fresh_add) {
         ise._fresh_add = false;
+
+        zprn msg;
+        msg.zprn_cmd = ZPRN_ROUTEMOD;
+        msg.zprn_un.route.dsta = it->first;
         msg.zprn_prio = (ise.empty()
           ? ZPRN_ROUTEMOD_DELETE
           : ise._routers.front().hops);
@@ -1174,6 +1190,8 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
 
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
+    // we can't merge this loop and the following, because this loop iterates and only erases
+    // but the next loop inserts elements
     sort(discard_remotes.begin(), discard_remotes.end());
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
       const auto drit = lower_bound(discard_remotes.begin(), discard_remotes.end(), it->first);
@@ -1185,19 +1203,16 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    // replace remotes (after cleanup -> lesser routes to process)
-    for(auto &&i : tr_remotes) {
-      for(auto &r: routes)
-        r.second.replace_router(i.first, i.second);
-
-      remotes[i.second] = remotes[i.first];
+    // replace remotes (after cleanup -> lesser remotes to process)
+    for(const auto &i : tr_remotes) {
+      remotes[i.second] = std::move(remotes[i.first]);
       remotes.erase(i.first);
     }
     tr_remotes.clear();
 
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
-      for(auto &&r : zprd_conf.remotes) {
+      for(const auto &r : zprd_conf.remotes) {
         struct in_addr remote;
         if(!found_remotes.erase(i) && resolve_hostname(r.c_str(), remote)) {
           remotes[remote.s_addr] = {i};

@@ -28,8 +28,7 @@ bool resolve_hostname(const char * const hostname, struct in_addr &remote) {
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_DGRAM;
 
-  const int rv = getaddrinfo(hostname, 0, &hints, &servinfo);
-  if(rv) {
+  if(const int rv = getaddrinfo(hostname, 0, &hints, &servinfo)) {
     printf("CLIENT ERROR: getaddrinfo: %s\n", gai_strerror(rv));
     return false;
   }

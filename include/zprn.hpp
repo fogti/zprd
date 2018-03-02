@@ -29,6 +29,6 @@ struct zprn {
 
   zprn();
   bool valid() const noexcept;
-  void send(const std::vector<uint32_t> &peers) const;
+  void send(const std::vector<uint32_t> &peers) const noexcept;
 };
 #endif
