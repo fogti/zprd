@@ -62,14 +62,14 @@ static int crw_end(const int cnt, const char * const action, const int fd) {
   exit(1);
 }
 
-int cread(const int fd, char *buf, const int n) {
+int cread(const int fd, char *buf, const size_t n) {
   return crw_end(
     read(fd, buf, n),
     "read()", fd
   );
 }
 
-int cwrite(const int fd, const char *buf, const int n) {
+int cwrite(const int fd, const char *buf, const size_t n) {
   return crw_end(
     write(fd, buf, n),
     "write()", fd
@@ -78,7 +78,7 @@ int cwrite(const int fd, const char *buf, const int n) {
 
 // additional functions needed for work with UDP
 
-int crecvfrom(const int fd, char *buf, const int n, struct sockaddr_in *addr) {
+int crecvfrom(const int fd, char *buf, const size_t n, struct sockaddr_in *addr) {
   socklen_t addrlen = sizeof(*addr);
   return crw_end(
     recvfrom(fd, buf, n, 0, (struct sockaddr *) addr, &addrlen),
@@ -86,14 +86,14 @@ int crecvfrom(const int fd, char *buf, const int n, struct sockaddr_in *addr) {
   );
 }
 
-int csendto(const int fd, const char *buf, const int n, const struct sockaddr_in *addr) {
+int csendto(const int fd, const char *buf, const size_t n, const struct sockaddr_in *addr) {
   return crw_end(
     sendto(fd, buf, n, 0, (struct sockaddr *) addr, sizeof(*addr)),
     "sendto()", fd
   );
 }
 
-int recv_n(const int fd, char *buf, const int n, struct sockaddr_in *addr) {
+int recv_n(const int fd, char *buf, const size_t n, struct sockaddr_in *addr) {
   int cnt;
   while(!(cnt = crecvfrom(fd, buf, n, addr))) ;
   return cnt;

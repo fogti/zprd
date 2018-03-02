@@ -78,7 +78,7 @@ static int local_fd, server_fd;
 static ThreadPool threadpool(thread::hardware_concurrency() + 1);
 static unordered_map<uint32_t, remote_peer_t> remotes;
 
-struct via_router_t {
+struct via_router_t final {
   uint32_t addr;
   time_t   seen;
   double   latency;
@@ -88,20 +88,22 @@ struct via_router_t {
     : addr(_addr), seen(time(0)), latency(0), hops(_hops) { }
 };
 
-struct ping_cache_match {
+struct ping_cache_match final {
   double diff;
   uint32_t dst, router;
   uint8_t hops;
   bool match;
+
+  void apply() const noexcept;
 };
 
-// TODO: handle failure of clock_gettime
-class ping_cache_t {
+class ping_cache_t final {
   double _seen;
   uint32_t _src, _dst, _router;
   uint16_t _id, _seq;
   uint8_t  _ttl;
 
+  // TODO: handle failure of clock_gettime
   static double get_ms_time() {
     struct timespec curt;
     clock_gettime(CLOCK_MONOTONIC, &curt);
@@ -111,16 +113,8 @@ class ping_cache_t {
  public:
   ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0), _id(0), _seq(0), _ttl(0) { }
 
-  void clear() {
-    _seen = 0;
-    _seq  = 0;
-  }
-
-  bool empty() const {
-    return (!_seen && !_seq);
-  }
-
-  void init(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq, const uint8_t ttl) {
+  void init(const uint32_t src, const uint32_t dst, const uint32_t router,
+            const uint16_t id, const uint16_t seq, const uint8_t ttl) noexcept {
     _seen   = get_ms_time();
     _src    = src;
     _dst    = dst;
@@ -130,10 +124,12 @@ class ping_cache_t {
     _ttl    = ttl;
   }
 
-  ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router, const uint16_t id, const uint16_t seq, const uint8_t ttl) {
-    if(src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
+  ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router,
+                         const uint16_t id, const uint16_t seq, const uint8_t ttl) noexcept {
+    if(_seen && src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
       const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_ttl - ttl + 1), true };
-      clear();
+      _seen = 0;
+      _seq  = 0;
       return ret;
     } else {
       return { 1, 0, 0, 255, false };
@@ -144,7 +140,7 @@ class ping_cache_t {
 static ping_cache_t ping_cache;
 
 // collection of via_route_t's
-struct route_via_t {
+struct route_via_t final {
   std::forward_list<via_router_t> _routers;
   bool _fresh_add;
 
@@ -200,7 +196,7 @@ struct route_via_t {
     return ret;
   }
 
-  void update_router(const uint32_t router, const uint8_t hops, const double latency) {
+  void update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
     const auto it_e = _routers.end();
     const auto it = find_if(_routers.begin(), it_e,
       [router](const via_router_t &i) noexcept {
@@ -223,34 +219,35 @@ struct route_via_t {
    * @param rold, rnew   old and new router addr
    **/
   void replace_router(const uint32_t rold, const uint32_t rnew) {
-    auto it_e = _routers.end();
-    auto it_o = it_e;
-    bool nf = false;
+    const auto it_e = _routers.end();
+    auto it_ob = it_e; // (iterator to old router) - 1
+    bool nf = true;    // new router not found?
 
-    for(auto it = _routers.begin(); it != it_e; ++it) {
+    for(auto it = _routers.begin(), itb = _routers.before_begin(); it != it_e; ++it, ++itb) {
       if(it->addr == rold)
-        it_o = it;
+        it_ob = itb;
       else if(it->addr == rnew)
-        nf = true;
+        nf = false;
       else
         continue;
 
-      if(nf && it_o != it_e)
+      if(!(nf || it_ob == it_e))
         break;
     }
 
-    if(it_o == it_e) return;
-
-    if(nf) {
-      // we found only old
-      it_o->addr = rnew;
+    if(it_ob == it_e) {
+      // found [!o ?n]
+    } else if(nf) {
+      // found [o !n]
+      ++it_ob;
+      it_ob->addr = rnew;
     } else {
-      // we found new and old
-      del_router(rold);
+      // found [o n]
+      _routers.erase_after(it_ob);
     }
   }
 
-  bool del_router(const uint32_t router) {
+  bool del_router(const uint32_t router) noexcept {
     bool ret = false;
     _routers.remove_if(
       [router, &ret](const via_router_t &a) noexcept -> bool {
@@ -272,7 +269,7 @@ struct route_via_t {
 typedef unordered_map<uint32_t, route_via_t> routes_t;
 static routes_t routes;
 
-struct negative_route {
+struct negative_route final {
   uint32_t former_router;
 };
 
@@ -426,7 +423,7 @@ static void init_all(const string &confpath) {
 
   {
     size_t i = 0;
-    for(auto &&r : zprd_conf.remotes) {
+    for(const auto &r : zprd_conf.remotes) {
       struct in_addr remote;
       if(resolve_hostname(r.c_str(), remote)) {
         remotes[remote.s_addr] = {i};
@@ -465,10 +462,16 @@ static void init_all(const string &confpath) {
   }
 }
 
-static route_via_t* have_route(const uint32_t dsta) {
+static route_via_t* have_route(const uint32_t dsta) noexcept {
   const auto it = routes.find(dsta);
   if(it == routes.end() || it->second.empty()) return 0;
   return &(it->second);
+}
+
+void ping_cache_match::apply() const noexcept {
+  if(!match) return;
+  const auto r = have_route(dst);
+  if(r) r->update_router(router, hops, diff);
 }
 
 // get_remote_desc: returns a description string of socket ip
@@ -486,7 +489,7 @@ static string get_remote_desc(const uint32_t addr) {
  * @param buflen  the length of the buffer
  * @ret           written bytes count
  **/
-int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
+int send_packet(const uint32_t ent, const char *buffer, const size_t buflen) noexcept {
   if((have_local_ip && ent == local_ip.s_addr) || ent == htonl(0))
     return cwrite(local_fd, buffer, buflen);
 
@@ -498,7 +501,7 @@ int send_packet(const uint32_t ent, const char *buffer, const int buflen) {
   return csendto(server_fd, buffer, buflen, &dsta);
 }
 
-void set_ip_df(const uint8_t frag) {
+void set_ip_df(const uint8_t frag) noexcept {
   const bool df = frag & htons(IP_DF);
   const int tmp_df = df ?
 #if defined(IP_DONTFRAG)
@@ -518,7 +521,7 @@ void set_ip_df(const uint8_t frag) {
 /** set_ip_df
  * sets or unsets the dont-frag bit in the outer ip header
  **/
-static void set_ip_df(const struct ip * const h_ip) {
+static void set_ip_df(const struct ip * const h_ip) noexcept {
   set_ip_df(h_ip->ip_off);
 }
 
@@ -597,12 +600,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   send_packet(source_ip, buffer, buflen);
 }
 
-static void apply_ping_cache_match(const ping_cache_match &m) {
-  if(!m.match) return;
-  const auto r = have_route(m.dst);
-  if(r) r->update_router(m.router, m.hops, m.diff);
-}
-
 static void send_zprn_msg(const zprn &msg) {
   auto fut_stos = threadpool.enqueue([] {
     // setup outer header
@@ -612,7 +609,7 @@ static void send_zprn_msg(const zprn &msg) {
   });
 
   vector<uint32_t> peers;
-  for(auto &&i: remotes)
+  for(const auto &i: remotes)
     peers.emplace_back(i.first);
 
   const auto rem_peer = [&peers](const uint32_t peer) {
@@ -767,9 +764,9 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
       auto &route = routes[ip_dst.s_addr];
       const auto router = route.get_router();
       if(route.del_primary_router()) {
-        printf("ROUTER: delete route to %s ", inet_ntoa(ip_dst));
+        printf("ROUTER: delete route to %s via ", inet_ntoa(ip_dst));
         const auto d = get_remote_desc(router);
-        printf("via %s (invalid)\n", d.c_str());
+        printf("%s (invalid)\n", d.c_str());
       }
     }
   } else {
@@ -803,9 +800,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
           if(r) {
             if(r->del_router(source_peer_ip)) {
               // routing table entry dropped
-              printf("ROUTER: delete route to %s ", inet_ntoa(target));
-              const auto d = get_remote_desc(source_peer_ip);
-              printf("via %s (unreachable)\n", d.c_str());
+              printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
             }
             // if there is a routing table entry left -> discard
             if(!r->empty()) ret.clear();
@@ -822,8 +817,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
             break;
 
           case ICMP_ECHOREPLY:
-            if(!ping_cache.empty())
-              apply_ping_cache_match(ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence, h_ip->ip_ttl));
+            ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence, h_ip->ip_ttl).apply();
             break;
 
           default: break;
@@ -844,8 +838,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
 
 static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
   remotes[sin_addr.s_addr].refresh();
-  const auto dsts = route_packet(sin_addr.s_addr, buffer, len);
-  for(auto &&dest : dsts)
+  for(const auto dest : route_packet(sin_addr.s_addr, buffer, len))
     send_packet(dest, buffer, len);
 }
 
@@ -1114,9 +1107,9 @@ int main(int argc, char *argv[]) {
 
     const auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
       // discard route
-      printf("ROUTER: delete route to %s ", inet_ntoa({addr}));
+      printf("ROUTER: delete route to %s via ", inet_ntoa({addr}));
       const auto d = get_remote_desc(router);
-      printf("via %s (outdated)\n", d.c_str());
+      printf("%s (outdated)\n", d.c_str());
     };
 
     vector<uint32_t> discard_remotes;
