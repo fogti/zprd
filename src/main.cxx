@@ -39,7 +39,6 @@
 // C++
 #include <forward_list>
 #include <tuple>
-#include <unordered_set>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
@@ -493,6 +492,24 @@ static string get_remote_desc(const uint32_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
+/** binary_find:
+ * a simple binary search function
+ **/
+template<class TCont, class T>
+auto binary_find(const TCont &c, const T &value) noexcept -> typename TCont::const_iterator {
+  const auto it = lower_bound(c.cbegin(), c.cend(), value);
+  return (it != c.cend() && *it == value) ? it : c.cend();
+}
+
+/** uniquify:
+ * make all elems in a container unique
+ **/
+template<class TCont>
+void uniquify(TCont &c) {
+  std::sort(c.begin(), c.end());
+  c.erase(std::unique(c.begin(), c.end()), c.end());
+}
+
 /** send_packet:
  * handles the sending of packets to a remote or local (identified by ent)
  *
@@ -664,9 +681,9 @@ static void send_zprn_msg(const zprn &msg) {
  *
  * @ret             the ips of the destination sockets
  **/
-static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
+static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
   // ret_nul: fix errors when compiling with clang
-  static const unordered_set<uint32_t> ret_nul;
+# define ret_nul vector<uint32_t>{}
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
@@ -752,21 +769,30 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
     return ret_nul;
   }
 
+# undef ret_nul
+
   // get route to destination
-  unordered_set<uint32_t> ret;
+  vector<uint32_t> ret;
   if(is_broadcast) {
     ret.reserve(remotes.size() + 1);
-    for(const auto &i : remotes) ret.emplace(i.first);
-    ret.emplace(local_ip.s_addr);
+    for(const auto &i : remotes) ret.push_back(i.first);
+    ret.push_back(local_ip.s_addr);
+    uniquify(ret);
   } else {
-    ret.emplace(routes[ip_dst.s_addr].get_router());
+    ret.emplace_back(routes[ip_dst.s_addr].get_router());
   }
 
+  // function to filter a peer
+  const auto rem_peer = [&ret](const uint32_t addr) {
+    const auto it = binary_find(ret, addr);
+    if(it != ret.cend()) ret.erase(it);
+  };
+
   // split horizon
-  ret.erase(source_peer_ip);
+  rem_peer(source_peer_ip);
 
   // catch bouncing packets in *local iface* network earlier
-  if(!iam_ep) ret.erase(local_ip.s_addr);
+  if(!iam_ep) rem_peer(local_ip.s_addr);
 
   // fetch chksum before possible send_icmp_msg
   h_ip->ip_sum = fut_ip_sum.get();
@@ -840,7 +866,7 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
         const ping_cache_data edat(echo.id, echo.sequence, h_ip->ip_ttl);
         switch(h_icmp->type) {
           case ICMP_ECHO:
-            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, *ret.begin(), edat);
+            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, ret.front(), edat);
             break;
 
           case ICMP_ECHOREPLY:
@@ -1137,12 +1163,12 @@ int main(int argc, char *argv[]) {
     };
 
     vector<uint32_t> discard_remotes;
-    unordered_set<size_t> found_remotes;
+    vector<size_t>   found_remotes;
     unordered_map<uint32_t, uint32_t> tr_remotes;
 
     for(auto &i : remotes) {
       if(i.second.cent != -1)
-        found_remotes.emplace(i.second.cent);
+        found_remotes.push_back(i.second.cent);
 
       bool discard = true;
 
@@ -1201,10 +1227,10 @@ int main(int argc, char *argv[]) {
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
     // we can't merge this loop and the following, because this loop iterates and only erases
     // but the next loop inserts elements
-    sort(discard_remotes.begin(), discard_remotes.end());
+    std::sort(discard_remotes.begin(), discard_remotes.end());
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
-      const auto drit = lower_bound(discard_remotes.cbegin(), discard_remotes.cend(), it->first);
-      if(drit != discard_remotes.cend() && *drit == it->first) {
+      const auto drit = binary_find(discard_remotes, it->first);
+      if(drit != discard_remotes.cend()) {
         discard_remotes.erase(drit);
         it = remotes.erase(it);
       } else {
@@ -1219,13 +1245,18 @@ int main(int argc, char *argv[]) {
     }
     tr_remotes.clear();
 
+    uniquify(found_remotes);
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
       for(const auto &r : zprd_conf.remotes) {
-        struct in_addr remote;
-        if(!found_remotes.erase(i) && resolve_hostname(r.c_str(), remote)) {
-          remotes[remote.s_addr] = {i};
-          printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
+        const auto frit = binary_find(found_remotes, i);
+        if(frit != found_remotes.cend()) {
+          found_remotes.erase(frit);
+          struct in_addr remote;
+          if(resolve_hostname(r.c_str(), remote)) {
+            remotes[remote.s_addr] = {i};
+            printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
+          }
         }
         ++i;
       }
