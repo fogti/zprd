@@ -77,7 +77,7 @@ zprd_conf_t zprd_conf;
 static int local_fd, server_fd;
 
 // make sure that there are at least 2 worker threads
-static ThreadPool threadpool(std::max((unsigned) 2, (unsigned) thread::hardware_concurrency() + 1));
+static ThreadPool threadpool(std::max((unsigned) 2, (unsigned) thread::hardware_concurrency()));
 static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t final {
@@ -99,39 +99,51 @@ struct ping_cache_match final {
   void apply() const noexcept;
 };
 
+struct ping_cache_data final {
+  uint16_t id, seq;
+  uint8_t  ttl;
+
+  ping_cache_data()
+    : id(0), seq(0), ttl(0) { }
+
+  ping_cache_data(const uint16_t _id, const uint16_t _seq, const uint8_t _ttl) noexcept
+    : id(_id), seq(_seq), ttl(_ttl) { }
+};
+
+inline bool operator==(const ping_cache_data &a, const ping_cache_data &b) noexcept {
+  return tie(a.id, a.seq) == tie(b.id, b.seq);
+}
+
 class ping_cache_t final {
   double _seen;
   uint32_t _src, _dst, _router;
-  uint16_t _id, _seq;
-  uint8_t  _ttl;
+  ping_cache_data _dat;
 
   // TODO: handle failure of clock_gettime
-  static double get_ms_time() {
+  static double get_ms_time() noexcept {
     struct timespec curt;
     clock_gettime(CLOCK_MONOTONIC, &curt);
     return curt.tv_sec * 1000 + curt.tv_nsec / 1000000.0;
   }
 
  public:
-  ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0), _id(0), _seq(0), _ttl(0) { }
+  ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0) { }
 
   void init(const uint32_t src, const uint32_t dst, const uint32_t router,
-            const uint16_t id, const uint16_t seq, const uint8_t ttl) noexcept {
+            const ping_cache_data &dat) noexcept {
     _seen   = get_ms_time();
     _src    = src;
     _dst    = dst;
     _router = router;
-    _id     = id;
-    _seq    = seq;
-    _ttl    = ttl;
+    _dat    = dat;
   }
 
   ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router,
-                         const uint16_t id, const uint16_t seq, const uint8_t ttl) noexcept {
-    if(_seen && src == _src && dst == _dst && _router == router && id == _id && seq == _seq) {
-      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_ttl - ttl + 1), true };
+                         const ping_cache_data &dat) noexcept {
+    if(_seen && src == _src && dst == _dst && _router == router && dat == _dat) {
+      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_dat.ttl - dat.ttl + 1), true };
       _seen = 0;
-      _seq  = 0;
+      _dat.seq  = 0;
       return ret;
     } else {
       return { 1, 0, 0, 255, false };
@@ -150,7 +162,7 @@ struct route_via_t final {
 
   // deletes all outdates routers and sort routers
   template<typename Fn>
-  void cleanup(const Fn &f) {
+  void cleanup(const Fn f) {
     const auto ct = time(0) - 2 * zprd_conf.remote_timeout;
     _routers.remove_if(
       [ct,f](const via_router_t &a) {
@@ -827,13 +839,14 @@ static unordered_set<uint32_t> route_packet(const uint32_t source_peer_ip, char 
          *  echoreply : source and destination are swapped
          **/
         const auto &echo = h_icmp->un.echo;
+        const ping_cache_data edat(echo.id, echo.sequence, h_ip->ip_ttl);
         switch(h_icmp->type) {
           case ICMP_ECHO:
-            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, *ret.begin(), echo.id, echo.sequence, h_ip->ip_ttl);
+            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, *ret.begin(), edat);
             break;
 
           case ICMP_ECHOREPLY:
-            ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, echo.id, echo.sequence, h_ip->ip_ttl).apply();
+            ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, edat).apply();
             break;
 
           default: break;
