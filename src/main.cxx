@@ -496,9 +496,9 @@ static string get_remote_desc(const uint32_t addr) {
  * a simple binary search function
  **/
 template<class TCont, class T>
-auto binary_find(const TCont &c, const T &value) noexcept -> typename TCont::const_iterator {
-  const auto it = lower_bound(c.cbegin(), c.cend(), value);
-  return (it != c.cend() && *it == value) ? it : c.cend();
+auto binary_find(TCont &c, const T &value) noexcept -> typename TCont::iterator {
+  const auto it = lower_bound(c.begin(), c.end(), value);
+  return (it != c.end() && *it == value) ? it : c.end();
 }
 
 /** uniquify:
@@ -785,7 +785,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
   // function to filter a peer
   const auto rem_peer = [&ret](const uint32_t addr) {
     const auto it = binary_find(ret, addr);
-    if(it != ret.cend()) ret.erase(it);
+    if(it != ret.end()) ret.erase(it);
   };
 
   // split horizon
@@ -1230,7 +1230,7 @@ int main(int argc, char *argv[]) {
     std::sort(discard_remotes.begin(), discard_remotes.end());
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
       const auto drit = binary_find(discard_remotes, it->first);
-      if(drit != discard_remotes.cend()) {
+      if(drit != discard_remotes.end()) {
         discard_remotes.erase(drit);
         it = remotes.erase(it);
       } else {
@@ -1250,7 +1250,7 @@ int main(int argc, char *argv[]) {
       size_t i = 0;
       for(const auto &r : zprd_conf.remotes) {
         const auto frit = binary_find(found_remotes, i);
-        if(frit != found_remotes.cend()) {
+        if(frit != found_remotes.end()) {
           found_remotes.erase(frit);
           struct in_addr remote;
           if(resolve_hostname(r.c_str(), remote)) {
