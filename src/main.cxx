@@ -77,7 +77,7 @@ zprd_conf_t zprd_conf;
 static int local_fd, server_fd;
 
 // make sure that there are at least 2 worker threads
-static ThreadPool threadpool(std::max((unsigned) 2, (unsigned) thread::hardware_concurrency()));
+static ThreadPool threadpool(std::max(static_cast<unsigned>(2), thread::hardware_concurrency()));
 static unordered_map<uint32_t, remote_peer_t> remotes;
 
 struct via_router_t final {
@@ -103,7 +103,7 @@ struct ping_cache_data final {
   uint16_t id, seq;
   uint8_t  ttl;
 
-  ping_cache_data()
+  ping_cache_data() noexcept
     : id(0), seq(0), ttl(0) { }
 
   ping_cache_data(const uint16_t _id, const uint16_t _seq, const uint8_t _ttl) noexcept
@@ -140,7 +140,7 @@ class ping_cache_t final {
 
   ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router,
                          const ping_cache_data &dat) noexcept {
-    if(_seen && src == _src && dst == _dst && _router == router && dat == _dat) {
+    if(_seen && tie(src, dst, router, dat) == tie(_src, _dst, _router, _dat)) {
       const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_dat.ttl - dat.ttl + 1), true };
       _seen = 0;
       _dat.seq  = 0;
@@ -351,7 +351,7 @@ static void init_all(const string &confpath) {
           break;
 
         case 'R':
-          zprd_conf.remotes.emplace_back(arg);
+          zprd_conf.remotes.push_back(arg);
           break;
 
         case 'T':
@@ -1207,8 +1207,8 @@ int main(int argc, char *argv[]) {
     // but the next loop inserts elements
     sort(discard_remotes.begin(), discard_remotes.end());
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
-      const auto drit = lower_bound(discard_remotes.begin(), discard_remotes.end(), it->first);
-      if(drit != discard_remotes.end() && *drit == it->first) {
+      const auto drit = lower_bound(discard_remotes.cbegin(), discard_remotes.cend(), it->first);
+      if(drit != discard_remotes.cend() && *drit == it->first) {
         discard_remotes.erase(drit);
         it = remotes.erase(it);
       } else {
