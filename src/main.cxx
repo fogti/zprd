@@ -125,7 +125,7 @@ class ping_cache_t final {
   }
 
  public:
-  ping_cache_t(): _seen(0), _src(0), _dst(0), _router(0) { }
+  ping_cache_t() noexcept: _seen(0), _src(0), _dst(0), _router(0) { }
 
   void init(const uint32_t src, const uint32_t dst, const uint32_t router,
             const ping_cache_data &dat) noexcept {
@@ -1140,24 +1140,24 @@ int main(int argc, char *argv[]) {
     unordered_set<size_t> found_remotes;
     unordered_map<uint32_t, uint32_t> tr_remotes;
 
-    for(auto it = remotes.begin(); it != remotes.end();) {
-      if(it->second.cent != -1)
-        found_remotes.emplace(it->second.cent);
+    for(auto &i : remotes) {
+      if(i.second.cent != -1)
+        found_remotes.emplace(i.second.cent);
 
       bool discard = true;
 
       // skip local, and remotes which aren't timed out
-      if(it->first == local_ip.s_addr || !it->second.outdated()) {
+      if(i.first == local_ip.s_addr || !i.second.outdated()) {
         discard = false;
-      } else if(it->second.cent != -1) {
+      } else if(i.second.cent != -1) {
         // try to update ip
         struct in_addr remote;
-        if(resolve_hostname(it->second.cfgent_name(), remote)) {
-          it->second.refresh();
-          if(remote.s_addr != it->first) {
-            tr_remotes[it->first] = remote.s_addr;
+        if(resolve_hostname(i.second.cfgent_name(), remote)) {
+          i.second.refresh();
+          if(remote.s_addr != i.first) {
+            tr_remotes[i.first] = remote.s_addr;
             for(auto &r: routes)
-              r.second.replace_router(it->first, remote.s_addr);
+              r.second.replace_router(i.first, remote.s_addr);
           }
           discard = false;
         }
@@ -1165,13 +1165,11 @@ int main(int argc, char *argv[]) {
 
       if(discard) {
         for(auto &r: routes)
-          if(r.second.del_router(it->first))
-            del_route_msg(r.first, it->first);
+          if(r.second.del_router(i.first))
+            del_route_msg(r.first, i.first);
 
-        discard_remotes.emplace_back(it->first);
+        discard_remotes.emplace_back(i.first);
       }
-
-      ++it;
     }
 
     // cleanup routes, needs to be done after del_router calls
