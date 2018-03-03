@@ -97,24 +97,23 @@ struct ping_cache_match final {
 };
 
 struct ping_cache_data final {
+  uint32_t src, dst;
   uint16_t id, seq;
-  uint8_t  ttl;
 
-  ping_cache_data() noexcept
-    : id(0), seq(0), ttl(0) { }
-
-  ping_cache_data(const uint16_t _id, const uint16_t _seq, const uint8_t _ttl) noexcept
-    : id(_id), seq(_seq), ttl(_ttl) { }
+  ping_cache_data(const uint32_t _src = 0, const uint32_t _dst = 0,
+                  const uint16_t _id = 0, const uint16_t _seq = 0) noexcept
+    : src(_src), dst(_dst), id(_id), seq(_seq) { }
 };
 
 inline bool operator==(const ping_cache_data &a, const ping_cache_data &b) noexcept {
-  return tie(a.id, a.seq) == tie(b.id, b.seq);
+  // NOTE: src and dst are swapped between a and b
+  return tie(a.src, a.dst, a.id, a.seq) == tie(b.dst, b.src, b.id, b.seq);
 }
 
 class ping_cache_t final {
   double _seen;
-  uint32_t _src, _dst, _router;
   ping_cache_data _dat;
+  uint32_t _router;
 
   // TODO: handle failure of clock_gettime
   static double get_ms_time() noexcept {
@@ -124,23 +123,17 @@ class ping_cache_t final {
   }
 
  public:
-  ping_cache_t() noexcept: _seen(0), _src(0), _dst(0), _router(0) { }
+  ping_cache_t() noexcept: _seen(0), _router(0) { }
 
-  void init(const uint32_t src, const uint32_t dst, const uint32_t router,
-            const ping_cache_data &dat) noexcept {
+  void init(const ping_cache_data &dat, const uint32_t router) noexcept {
     _seen   = get_ms_time();
-    _src    = src;
-    _dst    = dst;
-    _router = router;
     _dat    = dat;
+    _router = router;
   }
 
-  ping_cache_match match(const uint32_t src, const uint32_t dst, const uint32_t router,
-                         const ping_cache_data &dat) noexcept {
-    if(_seen && tie(src, dst, router, dat) == tie(_src, _dst, _router, _dat)) {
-      const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_dat.ttl - dat.ttl + 1), true };
-      printf("ROUTER DEBUG: ping cache: ottl %u, nttl %u, hops %u\n",
-             static_cast<unsigned>(_dat.ttl), static_cast<unsigned>(dat.ttl), ret.hops);
+  ping_cache_match match(const ping_cache_data &dat, const uint32_t router, const uint8_t ttl) noexcept {
+    if(_seen && tie(router, dat) == tie(_router, _dat)) {
+      const ping_cache_match ret = { get_ms_time() - _seen, dat.src, router, uint8_t(65 - ttl), true };
       _seen = 0;
       _dat.seq  = 0;
       return ret;
@@ -865,14 +858,14 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
          *  echoreply : source and destination are swapped
          **/
         const auto &echo = h_icmp->un.echo;
-        const ping_cache_data edat(echo.id, echo.sequence, h_ip->ip_ttl);
+        const ping_cache_data edat(ip_src.s_addr, ip_dst.s_addr, echo.id, echo.sequence);
         switch(h_icmp->type) {
           case ICMP_ECHO:
-            ping_cache.init(ip_src.s_addr, ip_dst.s_addr, ret.front(), edat);
+            ping_cache.init(edat, ret.front());
             break;
 
           case ICMP_ECHOREPLY:
-            ping_cache.match(ip_dst.s_addr, ip_src.s_addr, source_peer_ip, edat).apply();
+            ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl).apply();
             break;
 
           default: break;
