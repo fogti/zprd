@@ -51,6 +51,7 @@
 #include "addr.hpp"
 #include "cksum.h"
 #include "crw.h"
+#include "ping_cache.hpp"
 #include "recentpkts.hpp"
 #include "remote_peer.hpp"
 #include "resolve.hpp"
@@ -66,17 +67,6 @@ using namespace std;
 
 zprd_conf_t zprd_conf;
 
-/** file descriptors
- *
- * local_fd  = the tun device
- * server_fd = the server udp socket
- **/
-static int local_fd, server_fd;
-
-// make sure that there are at least 2 worker threads
-static ThreadPool threadpool(std::max(static_cast<unsigned>(2), thread::hardware_concurrency()));
-static unordered_map<uint32_t, remote_peer_t> remotes;
-
 struct via_router_t final {
   uint32_t addr;
   time_t   seen;
@@ -86,64 +76,6 @@ struct via_router_t final {
   via_router_t(const uint32_t _addr, const uint8_t _hops)
     : addr(_addr), seen(time(0)), latency(0), hops(_hops) { }
 };
-
-struct ping_cache_match final {
-  double diff;
-  uint32_t dst, router;
-  uint8_t hops;
-  bool match;
-
-  void apply() const noexcept;
-};
-
-struct ping_cache_data final {
-  uint32_t src, dst;
-  uint16_t id, seq;
-
-  ping_cache_data(const uint32_t _src = 0, const uint32_t _dst = 0,
-                  const uint16_t _id = 0, const uint16_t _seq = 0) noexcept
-    : src(_src), dst(_dst), id(_id), seq(_seq) { }
-};
-
-inline bool operator==(const ping_cache_data &a, const ping_cache_data &b) noexcept {
-  // NOTE: src and dst are swapped between a and b
-  return tie(a.src, a.dst, a.id, a.seq) == tie(b.dst, b.src, b.id, b.seq);
-}
-
-class ping_cache_t final {
-  double _seen;
-  ping_cache_data _dat;
-  uint32_t _router;
-
-  // TODO: handle failure of clock_gettime
-  static double get_ms_time() noexcept {
-    struct timespec curt;
-    clock_gettime(CLOCK_MONOTONIC, &curt);
-    return curt.tv_sec * 1000 + curt.tv_nsec / 1000000.0;
-  }
-
- public:
-  ping_cache_t() noexcept: _seen(0), _router(0) { }
-
-  void init(const ping_cache_data &dat, const uint32_t router) noexcept {
-    _seen   = get_ms_time();
-    _dat    = dat;
-    _router = router;
-  }
-
-  ping_cache_match match(const ping_cache_data &dat, const uint32_t router, const uint8_t ttl) noexcept {
-    if(_seen && tie(router, dat) == tie(_router, _dat)) {
-      const ping_cache_match ret = { get_ms_time() - _seen, dat.src, router, uint8_t(65 - ttl), true };
-      _seen = 0;
-      _dat.seq  = 0;
-      return ret;
-    } else {
-      return { 1, 0, 0, 255, false };
-    }
-  }
-};
-
-static ping_cache_t ping_cache;
 
 // collection of via_route_t's
 struct route_via_t final {
@@ -270,14 +202,26 @@ struct route_via_t final {
   }
 };
 
-typedef unordered_map<uint32_t, route_via_t> routes_t;
-static routes_t routes;
-
 struct negative_route final {
   uint32_t former_router;
 };
 
+/*** global vars ***/
+
+/** file descriptors
+ *
+ * local_fd  = the tun device
+ * server_fd = the server udp socket
+ **/
+static int local_fd, server_fd;
+
+// make sure that there are at least 2 worker threads
+static ThreadPool threadpool(std::max(static_cast<unsigned>(2), thread::hardware_concurrency()));
+
+static unordered_map<uint32_t, remote_peer_t>  remotes;
+static unordered_map<uint32_t, route_via_t>    routes;
 static unordered_map<uint32_t, negative_route> neg_routes;
+static ping_cache_t ping_cache;
 
 static in_addr local_ip, local_netmask;
 static bool have_local_ip;
@@ -474,10 +418,9 @@ static route_via_t* have_route(const uint32_t dsta) noexcept {
   );
 }
 
-void ping_cache_match::apply() const noexcept {
-  if(match)
-    if(const auto r = have_route(dst))
-      r->update_router(router, hops, diff);
+static void ping_cache_match_apply_fn(const ping_cache_t::match_t &m) noexcept {
+  if(const auto r = have_route(m.dst))
+    r->update_router(m.router, m.hops, m.diff);
 }
 
 // get_remote_desc: returns a description string of socket ip
@@ -858,7 +801,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
          *  echoreply : source and destination are swapped
          **/
         const auto &echo = h_icmp->un.echo;
-        const ping_cache_data edat(ip_src.s_addr, ip_dst.s_addr, echo.id, echo.sequence);
+        const ping_cache_t::data_t edat(ip_src.s_addr, ip_dst.s_addr, echo.id, echo.sequence);
         switch(h_icmp->type) {
           case ICMP_ECHO:
             ping_cache.init(edat, ret.front());
@@ -1101,6 +1044,7 @@ int main(int argc, char *argv[]) {
     init_all(confpath);
   }
 
+  ping_cache_t::match_t::apply_fn = ping_cache_match_apply_fn;
   my_signal(SIGUSR1, print_routing_table);
   fflush(stdout);
   fflush(stderr);
@@ -1259,6 +1203,7 @@ int main(int argc, char *argv[]) {
 
     // flush output
     fflush(stdout);
+    fflush(stderr);
   }
 
   return 0;
