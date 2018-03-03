@@ -139,6 +139,8 @@ class ping_cache_t final {
                          const ping_cache_data &dat) noexcept {
     if(_seen && tie(src, dst, router, dat) == tie(_src, _dst, _router, _dat)) {
       const ping_cache_match ret = { get_ms_time() - _seen, dst, router, uint8_t(_dat.ttl - dat.ttl + 1), true };
+      printf("ROUTER DEBUG: ping cache: ottl %u, nttl %u, hops %u\n",
+             static_cast<unsigned>(_dat.ttl), static_cast<unsigned>(dat.ttl), ret.hops);
       _seen = 0;
       _dat.seq  = 0;
       return ret;
