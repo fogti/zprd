@@ -58,7 +58,6 @@
 #include "zprd_conf.hpp"
 #include "zprn.hpp"
 #include "zsig.h"
-#include "main.hpp"
 
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 65536
@@ -196,9 +195,8 @@ struct route_via_t final {
   }
 
   bool del_primary_router() noexcept {
-    if(empty()) return false;
-    _routers.pop_front();
-    return true;
+    if(!empty()) _routers.pop_front();
+    return empty();
   }
 };
 
@@ -261,7 +259,8 @@ static void init_all(const string &confpath) {
     // DEFAULTS
     zprd_conf.data_port      = 45940; // P45940
     zprd_conf.remote_timeout = 600;   // T600   = 10 min
-    have_local_ip = false;
+    local_ip.s_addr          = htonl(0);
+    have_local_ip            = false;
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
@@ -448,7 +447,7 @@ void uniquify(TCont &c) {
   c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
-/** send_packet:
+/** send packet:
  * handles the sending of packets to a remote or local (identified by ent)
  *
  * @param ent     the ip of the destination
@@ -456,19 +455,31 @@ void uniquify(TCont &c) {
  * @param buflen  the length of the buffer
  * @ret           written bytes count
  **/
-int send_packet(const uint32_t ent, const char *buffer, const size_t buflen) noexcept {
-  if((have_local_ip && ent == local_ip.s_addr) || ent == htonl(0))
-    return cwrite(local_fd, buffer, buflen);
+class prepared_send final {
+  struct sockaddr_in _dsta;
+  const char *const _buffer;
+  const size_t _buflen;
 
-  struct sockaddr_in dsta;
-  memset(&dsta, 0, sizeof(dsta));
-  dsta.sin_family = AF_INET;
-  dsta.sin_addr.s_addr = ent;
-  dsta.sin_port = htons(zprd_conf.data_port);
-  return csendto(server_fd, buffer, buflen, &dsta);
-}
+ public:
+  prepared_send(const char *const buffer, const size_t buflen) noexcept
+    : _buffer(buffer), _buflen(buflen) {
+    memset(&_dsta, 0, sizeof(_dsta));
+    _dsta.sin_family = AF_INET;
+    _dsta.sin_port   = htons(zprd_conf.data_port);
+  }
 
-void set_ip_df(const uint8_t frag) noexcept {
+  int send2local() const noexcept {
+    return cwrite(local_fd, _buffer, _buflen);
+  }
+
+  int send2remote(const uint32_t ent) const noexcept {
+    struct sockaddr_in dsta = _dsta;
+    dsta.sin_addr.s_addr = ent;
+    return csendto(server_fd, _buffer, _buflen, &dsta);
+  }
+};
+
+static void set_ip_df(const uint8_t frag) noexcept {
   const bool df = frag & htons(IP_DF);
   const int tmp_df = df ?
 #if defined(IP_DONTFRAG)
@@ -567,12 +578,19 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 
   h_icmp->checksum = fut_icmp_sum.get();
   h_ip->ip_sum     = fut_ip_sum.get();
-  send_packet(source_ip, buffer, buflen);
+
+  const prepared_send pps(buffer, buflen);
+  if(source_ip == local_ip.s_addr)
+    pps.send2local();
+  else
+    pps.send2remote(source_ip);
 }
 
 static void send_zprn_msg(const zprn &msg) {
   auto fut_stos = threadpool.enqueue([] {
     // setup outer header
+    set_ip_df(static_cast<uint8_t>(0));
+
     const uint8_t tos = 0;
     if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
@@ -602,35 +620,39 @@ static void send_zprn_msg(const zprn &msg) {
     }
   }
 
+  const prepared_send pps(reinterpret_cast<const char *>(&msg), sizeof(msg));
+
   fut_stos.wait();
-  msg.send(peers);
+  for(auto &&ent : move(peers))
+    pps.send2remote(move(ent));
 }
 
 /** route_packet:
  *
  * decide which socket is the destination,
  * based on the destination ip and the routing table,
- * decrement the ttl
+ * decrement the ttl, send the packet
  *
  * @param source_ip the source peer ip
  * @param buffer    (in/out) packet data
  * @param buflen    length of buffer / packet data
  *                  (often = nread)
  *
- * @ret             the ips of the destination sockets
+ * @do              send packets to the destination sockets
+ * @ret             none
  **/
-static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
-  // ret_nul: fix errors when compiling with clang
-# define ret_nul vector<uint32_t>{}
+static void route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
   const bool is_icmp       = (h_ip->ip_p == IPPROTO_ICMP);
 
+  remotes[source_peer_ip].refresh();
+
   if(is_icmp && (sizeof(struct ip) + sizeof(struct icmphdr)) > buflen) {
     printf("ROUTER: drop packet %u (too small icmp packet; size = %u) from %s\n", pkid, buflen, source_desc_c);
-    return ret_nul;
+    return;
   }
 
   /* is_icmp_errmsg : flag if packet is an icmp error message
@@ -664,7 +686,7 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
     printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
     if(!is_icmp_errmsg)
       send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
-    return ret_nul;
+    return;
   }
 
   // decrement ttl
@@ -704,10 +726,8 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
 
   if(fut_rctpka.get()) {
     printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
-    return ret_nul;
+    return;
   }
-
-# undef ret_nul
 
   // get route to destination
   vector<uint32_t> ret;
@@ -821,16 +841,22 @@ static vector<uint32_t> route_packet(const uint32_t source_peer_ip, char buffer[
       set_ip_df(h_ip);
       if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
         perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+
+      // forward packets
+      prepared_send pps(buffer, buflen);
+
+      if(iam_ep) {
+        const auto it = binary_find(ret, local_ip.s_addr);
+        if(it != ret.end()) {
+          ret.erase(it);
+          pps.send2local();
+        }
+      }
+
+      for(const auto &dest : ret)
+        pps.send2remote(dest);
     }
   }
-
-  return ret;
-}
-
-static void progress_packet(const struct in_addr &sin_addr, char buffer[], const uint16_t len) {
-  remotes[sin_addr.s_addr].refresh();
-  for(const auto dest : route_packet(sin_addr.s_addr, buffer, len))
-    send_packet(dest, buffer, len);
 }
 
 /** is_ipv4_packet
@@ -1083,14 +1109,14 @@ int main(int argc, char *argv[]) {
         // data from tun/tap: just read it and write it to the network
         nread = cread(local_fd, buffer, BUFSIZE);
         if(is_ipv4_packet("local", buffer, nread))
-          progress_packet(local_ip, buffer, nread);
+          route_packet(local_ip.s_addr, buffer, nread);
       }
 
       if(FD_ISSET(server_fd, &rd_set)) {
         struct in_addr addr;
         // data from the network: read it, and write it to the tun/tap interface.
         if(read_packet(addr, buffer, nread))
-          progress_packet(addr, buffer, nread);
+          route_packet(addr.s_addr, buffer, nread);
       }
     }
 
