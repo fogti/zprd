@@ -516,13 +516,16 @@ void sender_t::handle_data(const send_data &dat) const noexcept {
     perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
 
   // send data
+  const auto buf = dat.buffer.data();
+  const auto buflen = dat.buffer.size();
   if(dat.islcldest)
-    cwrite(local_fd, dat.buffer.data(), dat.buffer.size());
+    cwrite(local_fd, buf, buflen);
 
-  struct sockaddr_in dsta = _dstab;
+  struct sockaddr_in dsta;
+  memcpy(&dsta, &_dstab, sizeof(dsta));
   for(const auto &i : dat.rdests) {
     dsta.sin_addr.s_addr = i;
-    csendto(server_fd, dat.buffer.data(), dat.buffer.size(), &dsta);
+    csendto(server_fd, buf, buflen, &dsta);
   }
 }
 
