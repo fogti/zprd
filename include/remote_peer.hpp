@@ -15,7 +15,6 @@ struct remote_peer_t {
   remote_peer_t() noexcept;
   remote_peer_t(const size_t cfgent) noexcept;
   void refresh() noexcept;
-  bool outdated() const noexcept;
   const char *cfgent_name() const;
 };
 #endif

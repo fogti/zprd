@@ -110,7 +110,7 @@ struct route_via_t final {
   }
 
   uint32_t get_router() const noexcept {
-    return empty() ? htonl(INADDR_ANY) : _routers.front().addr;
+    return _routers.front().addr;
   }
 
   // add or modify a router
@@ -196,9 +196,8 @@ struct route_via_t final {
     return ret;
   }
 
-  bool del_primary_router() noexcept {
-    if(!empty()) _routers.pop_front();
-    return empty();
+  void del_primary_router() noexcept {
+    _routers.pop_front();
   }
 };
 
@@ -782,7 +781,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   if(have_local_ip && ip_dst == local_ip) {
     if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
       printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
-  } else if(routes.find(ip_dst.s_addr) == routes.end()) {
+  } else if(!have_route(ip_dst.s_addr)) {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
     is_broadcast = true;
   }
@@ -829,12 +828,11 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
 
       // to prevent routing loops
       // drop routing table entry, if there is any
-      auto &route = routes[ip_dst.s_addr];
-      const auto router = route.get_router();
-      if(route.del_primary_router()) {
+      if(const auto route = have_route(ip_dst.s_addr)) {
         printf("ROUTER: delete route to %s via ", inet_ntoa(ip_dst));
-        const auto d = get_remote_desc(router);
+        const auto d = get_remote_desc(route->get_router());
         printf("%s (invalid)\n", d.c_str());
+        route->del_primary_router();
       }
     }
   } else {
@@ -1138,6 +1136,10 @@ int main(int argc, char *argv[]) {
   my_signal(SIGTERM, do_shutdown);
 
   int retcode = 0;
+  // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
+  vector<uint32_t> discard_remotes;
+  vector<size_t>   found_remotes;
+  unordered_map<uint32_t, uint32_t> tr_remotes;
 
   while(!b_do_shutdown) {
     { // use select() to handle two descriptors at once
@@ -1179,39 +1181,39 @@ int main(int argc, char *argv[]) {
       printf("%s (outdated)\n", d.c_str());
     };
 
-    vector<uint32_t> discard_remotes;
-    vector<size_t>   found_remotes;
-    unordered_map<uint32_t, uint32_t> tr_remotes;
 
-    for(auto &i : remotes) {
-      if(i.second.cent != -1)
-        found_remotes.push_back(i.second.cent);
+    {
+      const auto curt = time(0);
+      for(auto &i : remotes) {
+        if(i.second.cent != -1)
+          found_remotes.push_back(i.second.cent);
 
-      bool discard = true;
+        bool discard = true;
 
-      // skip local, and remotes which aren't timed out
-      if(i.first == local_ip.s_addr || !i.second.outdated()) {
-        discard = false;
-      } else if(i.second.cent != -1) {
-        // try to update ip
-        struct in_addr remote;
-        if(resolve_hostname(i.second.cfgent_name(), remote)) {
-          i.second.refresh();
-          if(remote.s_addr != i.first) {
-            tr_remotes[i.first] = remote.s_addr;
-            for(auto &r: routes)
-              r.second.replace_router(i.first, remote.s_addr);
-          }
+        // skip local, and remotes which aren't timed out
+        if(i.first == local_ip.s_addr || (curt - zprd_conf.remote_timeout) < i.second.seen) {
           discard = false;
+        } else if(i.second.cent != -1) {
+          // try to update ip
+          struct in_addr remote;
+          if(resolve_hostname(i.second.cfgent_name(), remote)) {
+            i.second.seen = curt;
+            if(remote.s_addr != i.first) {
+              tr_remotes[i.first] = remote.s_addr;
+              for(auto &r: routes)
+                r.second.replace_router(i.first, remote.s_addr);
+            }
+            discard = false;
+          }
         }
-      }
 
-      if(discard) {
-        for(auto &r: routes)
-          if(r.second.del_router(i.first))
-            del_route_msg(r.first, i.first);
+        if(discard) {
+          for(auto &r: routes)
+            if(r.second.del_router(i.first))
+              del_route_msg(r.first, i.first);
 
-        discard_remotes.push_back(i.first);
+          discard_remotes.push_back(i.first);
+        }
       }
     }
 
@@ -1279,6 +1281,7 @@ int main(int argc, char *argv[]) {
         ++i;
       }
     }
+    found_remotes.clear();
 
     // flush output
     fflush(stdout);

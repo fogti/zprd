@@ -17,10 +17,6 @@ void remote_peer_t::refresh() noexcept {
   seen = time(0);
 }
 
-bool remote_peer_t::outdated() const noexcept {
-  return (time(0) - seen) >= zprd_conf.remote_timeout;
-}
-
 const char *remote_peer_t::cfgent_name() const {
   if(cent < 0) return "-";
   const auto &r = zprd_conf.remotes;
