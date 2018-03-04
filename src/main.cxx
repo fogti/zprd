@@ -217,7 +217,6 @@ struct send_data final {
 
 class sender_t final {
   queue<send_data> _tasks;
-  struct sockaddr_in _dstab;
 
   // sync
   mutex _mtx;
@@ -522,7 +521,10 @@ void sender_t::handle_data(const send_data &dat) const noexcept {
     cwrite(local_fd, buf, buflen);
 
   struct sockaddr_in dsta;
-  memcpy(&dsta, &_dstab, sizeof(dsta));
+  memset(&dsta, 0, sizeof(dsta));
+  dsta.sin_family = AF_INET;
+  dsta.sin_port   = htons(zprd_conf.data_port);
+
   for(const auto &i : dat.rdests) {
     dsta.sin_addr.s_addr = i;
     csendto(server_fd, buf, buflen, &dsta);
@@ -545,12 +547,7 @@ void sender_t::worker_fn() noexcept {
 }
 
 sender_t::sender_t()
-  : _stop(false), _worker(&sender_t::worker_fn, this)
-{
-  memset(&_dstab, 0, sizeof(_dstab));
-  _dstab.sin_family = AF_INET;
-  _dstab.sin_port   = htons(zprd_conf.data_port);
-}
+  : _stop(false), _worker(&sender_t::worker_fn, this) { }
 
 void sender_t::enqueue(send_data &&dat) {
   {
