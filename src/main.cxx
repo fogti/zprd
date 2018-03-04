@@ -33,6 +33,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/prctl.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 
@@ -529,6 +530,8 @@ void sender_t::handle_data(const send_data &dat) const noexcept {
 }
 
 void sender_t::worker_fn() noexcept {
+  prctl(PR_SET_NAME, "sender", 0, 0, 0);
+
   send_data dat;
   while(1) {
     {
