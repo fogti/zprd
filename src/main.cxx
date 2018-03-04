@@ -214,6 +214,28 @@ struct send_data final {
 
   send_data() noexcept
     : frag(0), tos(0), islcldest(false) { }
+
+  send_data(const send_data &o) = default;
+
+  send_data(send_data &&o) noexcept
+    : buffer(move(o.buffer)), rdests(move(o.rdests)),
+      frag(o.frag), tos(o.tos), islcldest(o.islcldest) { }
+
+  send_data(vector<char> &&buf, vector<uint32_t> &&rd, const uint8_t frag_ = 0,
+            const uint8_t tos_ = 0, const bool lcld = false) noexcept
+    : buffer(move(buf)), rdests(move(rd)), frag(frag_), tos(tos_), islcldest(lcld) { }
+
+  send_data& operator=(const send_data &o) = default;
+
+  send_data& operator=(send_data &&o) noexcept {
+    if(this != &o) {
+      buffer = move(o.buffer);
+      rdests = move(o.rdests);
+      frag = o.frag; tos = o.tos;
+      islcldest = o.islcldest;
+    }
+    return *this;
+  }
 };
 
 class sender_t final {
@@ -576,7 +598,8 @@ enum zprd_icmpe {
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
   constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  char buffer[buflen] = { 0 };
+  send_data dat({buflen, 0}, {});
+  char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   h_ip->ip_v   = 4;
@@ -630,15 +653,13 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
          orig_hip + sizeof(ip),
          std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
 
-  h_icmp->checksum = fut_icmp_sum.get();
-  h_ip->ip_sum     = fut_ip_sum.get();
-
-  send_data dat;
-  dat.buffer.assign(buffer, buffer + buflen);
   if(source_ip == local_ip.s_addr)
     dat.islcldest = true;
   else
     dat.rdests = {source_ip};
+
+  h_icmp->checksum = fut_icmp_sum.get();
+  h_ip->ip_sum     = fut_ip_sum.get();
   sender.enqueue(move(dat));
 }
 
@@ -646,9 +667,11 @@ static void send_zprn_msg(const zprn &msg) {
   vector<uint32_t> peers;
   peers.reserve(remotes.size());
   for(const auto &i: remotes) peers.push_back(i.first);
+  uniquify(peers);
 
   const auto rem_peer = [&peers](const uint32_t peer) {
-    peers.erase(std::remove(peers.begin(), peers.end(), peer), peers.end());
+    const auto it = binary_find(peers, peer);
+    if(it != peers.end()) peers.erase(it);
   };
 
   // filter local tun interface
@@ -667,11 +690,8 @@ static void send_zprn_msg(const zprn &msg) {
     }
   }
 
-  send_data dat;
   const auto msgptr = reinterpret_cast<const char *>(&msg);
-  dat.buffer.assign(msgptr, msgptr + sizeof(msg));
-  dat.rdests = move(peers);
-  sender.enqueue(move(dat));
+  sender.enqueue({{msgptr, msgptr + sizeof(msg)}, move(peers)});
 }
 
 /** route_packet:
@@ -875,10 +895,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
     }
 
     if(!ret.empty()) {
-      send_data dat;
-      dat.buffer.assign(buffer, buffer + buflen);
-      dat.frag = h_ip->ip_off;
-      dat.tos  = h_ip->ip_tos;
+      send_data dat({buffer, buffer + buflen}, {}, h_ip->ip_off, h_ip->ip_tos);
 
       if(iam_ep) {
         const auto it = binary_find(ret, local_ip.s_addr);
