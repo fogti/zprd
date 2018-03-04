@@ -35,7 +35,7 @@ int tun_alloc(char *dev, const int flags) {
 
   const int fd = open("/dev/net/tun", O_RDWR);
   if(fd < 0) {
-    perror("Opening /dev/net/tun");
+    perror("open(/dev/net/tun)");
     return fd;
   }
 

@@ -8,5 +8,9 @@ extern "C" {
   uint64_t in_hashsum(const uint8_t *ptr, uint16_t nbytes);
 # ifdef __cplusplus
 }
+template<typename T>
+uint16_t IN_CKSUM(const T *const ptr) noexcept {
+  return in_cksum(reinterpret_cast<const uint16_t*>(ptr), sizeof(T));
+}
 # endif
 #endif

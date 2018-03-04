@@ -37,6 +37,7 @@
 #include <fcntl.h>
 
 // C++
+#include <atomic>
 #include <forward_list>
 #include <tuple>
 #include <unordered_map>
@@ -204,6 +205,39 @@ struct negative_route final {
   uint32_t former_router;
 };
 
+struct send_data final {
+  vector<char> buffer;
+  vector<uint32_t> rdests;
+  uint8_t frag, tos;
+  bool islcldest;
+
+  send_data() noexcept
+    : frag(0), tos(0), islcldest(false) { }
+};
+
+class sender_t final {
+  queue<send_data> _tasks;
+  struct sockaddr_in _dstab;
+
+  // sync
+  mutex _mtx;
+  condition_variable _cond;
+  bool _stop;
+
+  // thread (should come last)
+  thread _worker;
+
+  void handle_data(const send_data &dat) const noexcept;
+  void worker_fn() noexcept;
+
+ public:
+  sender_t();
+  ~sender_t() noexcept { stop(); }
+
+  void enqueue(send_data &&dat);
+  void stop() noexcept;
+};
+
 /*** global vars ***/
 
 /** file descriptors
@@ -213,8 +247,9 @@ struct negative_route final {
  **/
 static int local_fd, server_fd;
 
-// make sure that there are at least 2 worker threads
-static ThreadPool threadpool(std::max(static_cast<unsigned>(2), thread::hardware_concurrency()));
+// make sure that there are at least 1 normal worker thread + 1 send thread
+static ThreadPool threadpool(std::max(2u, thread::hardware_concurrency()) - 1);
+static sender_t sender;
 
 static unordered_map<uint32_t, remote_peer_t>  remotes;
 static unordered_map<uint32_t, route_via_t>    routes;
@@ -224,14 +259,17 @@ static ping_cache_t ping_cache;
 static in_addr local_ip, local_netmask;
 static bool have_local_ip;
 
-static void init_all(const string &confpath) {
-  static const auto runcmd = [](const string &cmd) {
+static bool init_all(const string &confpath) {
+  static const auto runcmd_fn = [](const string &cmd) -> bool {
     if(system(cmd.c_str())) {
       printf("CONFIG APPLY ERROR: %s\n", cmd.c_str());
       perror("system()");
-      exit(1);
+      return false;
     }
+    return true;
   };
+
+#define runcmd(X) do { const auto rcf_ret = runcmd_fn(X); if(!rcf_ret) return false; } while(0)
 
   // redirect stdin (don't block terminals)
   {
@@ -239,11 +277,11 @@ static void init_all(const string &confpath) {
     if(ofd < 0) {
       fprintf(stderr, "ERROR: unable to open nullfile '/dev/null'\n");
       perror("open()");
-      exit(1);
+      return false;
     }
     if(dup2(ofd, 0)) {
       perror("dup2()");
-      exit(1);
+      return false;
     }
     close(ofd);
   }
@@ -253,7 +291,7 @@ static void init_all(const string &confpath) {
     ifstream in(confpath.c_str());
     if(!in) {
       fprintf(stderr, "ERROR: unable to open config file '%s'\n", confpath.c_str());
-      exit(1);
+      return false;
     }
 
     // DEFAULTS
@@ -306,7 +344,7 @@ static void init_all(const string &confpath) {
 
     if(zprd_conf.iface.empty()) {
       fprintf(stderr, "CONFIG ERROR: no interface specified\n");
-      exit(1);
+      return false;
     }
 
     if(!addr_stmt.empty()) {
@@ -318,7 +356,7 @@ static void init_all(const string &confpath) {
 
       if(!resolve_hostname(ip.c_str(), local_ip)) {
         fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: 'A%s'\n", addr_stmt.c_str());
-        exit(1);
+        return false;
       }
 
       have_local_ip = true;
@@ -331,6 +369,8 @@ static void init_all(const string &confpath) {
     runcmd("ip link set dev '" + zprd_conf.iface + "' mtu 1472");
     runcmd("ip link set dev '" + zprd_conf.iface + "' up");
 
+# undef runcmd
+
     if(!run_as_user.empty()) {
       printf("running daemon as user: '%s'\n", run_as_user.c_str());
 
@@ -340,12 +380,12 @@ static void init_all(const string &confpath) {
 
       if(!pwresult) {
         perror("STARTUP ERROR: getpwnam() failed");
-        exit(1);
+        return false;
       }
 
       if(setuid(pwresult->pw_uid) < 0) {
         perror("STARTUP ERROR: setuid() failed");
-        exit(1);
+        return false;
       }
     }
   }
@@ -361,7 +401,7 @@ static void init_all(const string &confpath) {
 
     if( (local_fd = tun_alloc(if_name, IFF_TUN | IFF_NO_PI)) < 0 ) {
       fprintf(stderr, "failed to connect to interface '%s'\n", if_name);
-      exit(1);
+      return false;
     }
     zprd_conf.iface = if_name;
 
@@ -382,20 +422,20 @@ static void init_all(const string &confpath) {
 
   if(remotes.empty() && !zprd_conf.remotes.empty()) {
     puts("CLIENT ERROR: can't connect to any server. QUIT");
-    exit(1);
+    return false;
   }
 
   // prepare server
   if( (server_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
     perror("socket()");
-    exit(1);
+    return false;
   }
 
   // avoid EADDRINUSE error on bind()
   int optval = 1;
   if(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
     perror("setsockopt()");
-    exit(1);
+    return false;
   }
 
   struct sockaddr_in local;
@@ -405,8 +445,9 @@ static void init_all(const string &confpath) {
   local.sin_port = htons(zprd_conf.data_port);
   if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&local), sizeof(local)) < 0) {
     perror("bind()");
-    exit(1);
+    return false;
   }
+  return true;
 }
 
 static route_via_t* have_route(const uint32_t dsta) noexcept {
@@ -447,38 +488,9 @@ void uniquify(TCont &c) {
   c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
-/** send packet:
- * handles the sending of packets to a remote or local (identified by ent)
- *
- * @param ent     the ip of the destination
- * @param buffer  the buffer
- * @param buflen  the length of the buffer
- * @ret           written bytes count
+/** set_ip_df
+ * sets or unsets the dont-frag bit in the outer ip header
  **/
-class prepared_send final {
-  struct sockaddr_in _dsta;
-  const char *const _buffer;
-  const size_t _buflen;
-
- public:
-  prepared_send(const char *const buffer, const size_t buflen) noexcept
-    : _buffer(buffer), _buflen(buflen) {
-    memset(&_dsta, 0, sizeof(_dsta));
-    _dsta.sin_family = AF_INET;
-    _dsta.sin_port   = htons(zprd_conf.data_port);
-  }
-
-  int send2local() const noexcept {
-    return cwrite(local_fd, _buffer, _buflen);
-  }
-
-  int send2remote(const uint32_t ent) const noexcept {
-    struct sockaddr_in dsta = _dsta;
-    dsta.sin_addr.s_addr = ent;
-    return csendto(server_fd, _buffer, _buflen, &dsta);
-  }
-};
-
 static void set_ip_df(const uint8_t frag) noexcept {
   const bool df = frag & htons(IP_DF);
   const int tmp_df = df ?
@@ -496,11 +508,67 @@ static void set_ip_df(const uint8_t frag) noexcept {
 #endif
 }
 
-/** set_ip_df
- * sets or unsets the dont-frag bit in the outer ip header
- **/
-static void set_ip_df(const struct ip * const h_ip) noexcept {
-  set_ip_df(h_ip->ip_off);
+void sender_t::handle_data(const send_data &dat) const noexcept {
+  // setup outer header
+  set_ip_df(dat.frag);
+
+  if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &dat.tos, 1) < 0)
+    perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+
+  // send data
+  if(dat.islcldest)
+    cwrite(local_fd, dat.buffer.data(), dat.buffer.size());
+
+  struct sockaddr_in dsta = _dstab;
+  for(const auto &i : dat.rdests) {
+    dsta.sin_addr.s_addr = i;
+    csendto(server_fd, dat.buffer.data(), dat.buffer.size(), &dsta);
+  }
+}
+
+void sender_t::worker_fn() noexcept {
+  send_data dat;
+  while(1) {
+    {
+      unique_lock<mutex> lock(_mtx);
+      _cond.wait(lock, [this] { return _stop || !_tasks.empty(); });
+      if(_stop || _tasks.empty()) return;
+      dat = std::move(_tasks.front());
+      _tasks.pop();
+    }
+
+    handle_data(dat);
+  }
+}
+
+sender_t::sender_t()
+  : _stop(false), _worker(&sender_t::worker_fn, this)
+{
+  memset(&_dstab, 0, sizeof(_dstab));
+  _dstab.sin_family = AF_INET;
+  _dstab.sin_port   = htons(zprd_conf.data_port);
+}
+
+void sender_t::enqueue(send_data &&dat) {
+  {
+    lock_guard<mutex> lock(_mtx);
+
+    if(_stop)
+      handle_data(dat);
+    else
+      _tasks.emplace(std::move(dat));
+  }
+  _cond.notify_one();
+}
+
+void sender_t::stop() noexcept {
+  {
+    lock_guard<mutex> lock(_mtx);
+    if(_stop) return;
+    _stop = true;
+  }
+  _cond.notify_all();
+  _worker.join();
 }
 
 enum zprd_icmpe {
@@ -552,53 +620,35 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   }
 
   // calculate icmp checksum
-  auto fut_icmp_sum = threadpool.enqueue([h_icmp] {
-    return in_cksum(reinterpret_cast<const uint16_t*>(h_icmp), sizeof(struct icmphdr));
-  });
+  auto fut_icmp_sum = threadpool.enqueue([h_icmp] { return IN_CKSUM(h_icmp); });
+
+  // calculate ip checksum
+  auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
 
   // setup payload = orig ip header
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
 
   // setup secondary payload = first 8 bytes of original payload
-  {
-    const size_t diff = ntohs(orig_hip->ip_len);
-    memcpy(buffer + 2 * sizeof(struct ip) + sizeof(struct icmphdr), orig_hip + sizeof(ip), (diff > 8) ? 8 : diff);
-  }
-
-  // calculate ip checksum
-  auto fut_ip_sum = threadpool.enqueue([h_ip] {
-    return in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
-  });
-
-  // setup outer header
-  set_ip_df(h_ip);
-
-  if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+  memcpy(buffer + 2 * sizeof(struct ip) + sizeof(struct icmphdr),
+         orig_hip + sizeof(ip),
+         std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
 
   h_icmp->checksum = fut_icmp_sum.get();
   h_ip->ip_sum     = fut_ip_sum.get();
 
-  const prepared_send pps(buffer, buflen);
+  send_data dat;
+  dat.buffer.assign(buffer, buffer + buflen);
   if(source_ip == local_ip.s_addr)
-    pps.send2local();
+    dat.islcldest = true;
   else
-    pps.send2remote(source_ip);
+    dat.rdests = {source_ip};
+  sender.enqueue(move(dat));
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  auto fut_stos = threadpool.enqueue([] {
-    // setup outer header
-    set_ip_df(static_cast<uint8_t>(0));
-
-    const uint8_t tos = 0;
-    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
-  });
-
   vector<uint32_t> peers;
-  for(const auto &i: remotes)
-    peers.emplace_back(i.first);
+  peers.reserve(remotes.size());
+  for(const auto &i: remotes) peers.push_back(i.first);
 
   const auto rem_peer = [&peers](const uint32_t peer) {
     peers.erase(std::remove(peers.begin(), peers.end(), peer), peers.end());
@@ -620,11 +670,11 @@ static void send_zprn_msg(const zprn &msg) {
     }
   }
 
-  const prepared_send pps(reinterpret_cast<const char *>(&msg), sizeof(msg));
-
-  fut_stos.wait();
-  for(auto &&ent : move(peers))
-    pps.send2remote(move(ent));
+  send_data dat;
+  const auto msgptr = reinterpret_cast<const char *>(&msg);
+  dat.buffer.assign(msgptr, msgptr + sizeof(msg));
+  dat.rdests = move(peers);
+  sender.enqueue(move(dat));
 }
 
 /** route_packet:
@@ -642,13 +692,13 @@ static void send_zprn_msg(const zprn &msg) {
  * @ret             none
  **/
 static void route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
+  remotes[source_peer_ip].refresh();
+
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
   const bool is_icmp       = (h_ip->ip_p == IPPROTO_ICMP);
-
-  remotes[source_peer_ip].refresh();
 
   if(is_icmp && (sizeof(struct ip) + sizeof(struct icmphdr)) > buflen) {
     printf("ROUTER: drop packet %u (too small icmp packet; size = %u) from %s\n", pkid, buflen, source_desc_c);
@@ -658,21 +708,19 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   /* is_icmp_errmsg : flag if packet is an icmp error message
    *   reason : an echo packet could be used to establish an route without interference on application protos
    */
-  const bool is_icmp_errmsg = is_icmp
-    && ([buffer] {
-      const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip));
-      switch(h_icmp->type) {
-        case ICMP_ECHO:      // = 8
-        case ICMP_ECHOREPLY: // = 0
-        case  9: // Router advert
-        case 10: // Router select
-        case 13: // timestamp
-        case 14: // timestamp reply
-          return false;
-        default:
-          return true;
-      }
-    })();
+  const bool is_icmp_errmsg = is_icmp && ([buffer] {
+    switch(reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip))->type) {
+      case ICMP_ECHOREPLY: // = 0
+      case ICMP_ECHO:      // = 8
+      case  9: // Router advert
+      case 10: // Router select
+      case 13: // timestamp
+      case 14: // timestamp reply
+        return false;
+      default:
+        return true;
+    }
+  })();
 
   const auto &ip_src = h_ip->ip_src;
   const auto &ip_dst = h_ip->ip_dst;
@@ -702,9 +750,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   });
 
   // update checksum (because we changed the header)
-  auto fut_ip_sum = threadpool.enqueue([h_ip] {
-    return in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip));
-  });
+  auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
 
   // update routes
   if(routes[ip_src.s_addr].add_router(
@@ -758,15 +804,10 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(!is_icmp_errmsg) {
-      // we need at least 2 threads for this
-      auto fut_send = threadpool.enqueue([=] {
-        const zprd_icmpe msg = (
-          (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
-            ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
-        );
-
-        send_icmp_msg(msg, h_ip, source_peer_ip);
-      });
+      send_icmp_msg((
+        (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
+          ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
+      ), h_ip, source_peer_ip);
 
       // to prevent routing loops
       // drop routing table entry, if there is any
@@ -777,7 +818,6 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
         const auto d = get_remote_desc(router);
         printf("%s (invalid)\n", d.c_str());
       }
-      fut_send.wait();
     }
   } else {
     if(is_icmp) {
@@ -837,24 +877,20 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
     }
 
     if(!ret.empty()) {
-      // setup outer headers
-      set_ip_df(h_ip);
-      if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &h_ip->ip_tos, sizeof(h_ip->ip_tos)) < 0)
-        perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
-
-      // forward packets
-      prepared_send pps(buffer, buflen);
+      send_data dat;
+      dat.buffer.assign(buffer, buffer + buflen);
+      dat.frag = h_ip->ip_off;
+      dat.tos  = h_ip->ip_tos;
 
       if(iam_ep) {
         const auto it = binary_find(ret, local_ip.s_addr);
         if(it != ret.end()) {
           ret.erase(it);
-          pps.send2local();
+          dat.islcldest = true;
         }
       }
-
-      for(const auto &dest : ret)
-        pps.send2remote(dest);
+      dat.rdests = move(ret);
+      sender.enqueue(move(dat));
     }
   }
 }
@@ -878,7 +914,7 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
     return false;
   }
 
-  if(const uint16_t dsum = in_cksum(reinterpret_cast<const uint16_t*>(h_ip), sizeof(struct ip))) {
+  if(const uint16_t dsum = IN_CKSUM(h_ip)) {
     printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
            h_ip->ip_sum, dsum, source_desc_c);
     return false;
@@ -1022,16 +1058,10 @@ static void print_routing_table(int) {
   fflush(stdout);
 }
 
-static void zprn_disconnect() {
-  // notify our peers that we quit
-  puts("ROUTER: disconnect from peers");
-  zprn msg;
-  msg.zprn_cmd = ZPRN_CONNMGMT;
-  msg.zprn_prio = ZPRN_CONNMGMT_CLOSE;
-  msg.zprn_un.route.dsta = local_ip.s_addr;
-  send_zprn_msg(msg);
-  puts("QUIT");
-  exit(0);
+static atomic<bool> b_do_shutdown;
+
+static void do_shutdown(int) noexcept {
+  b_do_shutdown = true;
 }
 
 int main(int argc, char *argv[]) {
@@ -1067,10 +1097,12 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    init_all(confpath);
+    if(!init_all(confpath)) return 1;
   }
 
+  b_do_shutdown = false;
   ping_cache_t::match_t::apply_fn = ping_cache_match_apply_fn;
+  my_signal(SIGHUP,  SIG_IGN);
   my_signal(SIGUSR1, print_routing_table);
   fflush(stdout);
   fflush(stderr);
@@ -1087,9 +1119,12 @@ int main(int argc, char *argv[]) {
   // add route to ourselves to avoid sending two 'ZPRN add route' packets
   routes[local_ip.s_addr].add_router(local_ip.s_addr, 0);
 
-  atexit(zprn_disconnect);
+  my_signal(SIGINT, do_shutdown);
+  my_signal(SIGTERM, do_shutdown);
 
-  while(1) {
+  int retcode = 0;
+
+  while(!b_do_shutdown) {
     { // use select() to handle two descriptors at once
       fd_set rd_set;
       FD_ZERO(&rd_set);
@@ -1099,7 +1134,8 @@ int main(int argc, char *argv[]) {
       if(select(std::max(local_fd, server_fd) + 1, &rd_set, 0, 0, 0) < 0) {
         if(errno == EINTR) continue;
         perror("select()");
-        exit(1);
+        retcode = 1;
+        break;
       }
 
       uint16_t nread;
@@ -1159,7 +1195,7 @@ int main(int argc, char *argv[]) {
           if(r.second.del_router(i.first))
             del_route_msg(r.first, i.first);
 
-        discard_remotes.emplace_back(i.first);
+        discard_remotes.push_back(i.first);
       }
     }
 
@@ -1180,18 +1216,26 @@ int main(int argc, char *argv[]) {
           ? ZPRN_ROUTEMOD_DELETE
           : ise._routers.front().hops);
         send_zprn_msg(msg);
+
+        if(ise.empty()) it = routes.erase(it);
       }
 
-      if(ise.empty()) it = routes.erase(it);
-      else ++it;
+      if(!ise.empty()) ++it;
     }
 
     // flush output
     fflush(stdout);
 
+    // replace remotes (after cleanup -> lesser remotes to process)
+    // we can't merge this loop and the following, because this loop iterates and only inserts
+    // but the next loop erases elements
+    for(const auto &i : tr_remotes) {
+      remotes[i.second] = std::move(remotes[i.first]);
+      discard_remotes.push_back(i.first);
+    }
+    tr_remotes.clear();
+
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
-    // we can't merge this loop and the following, because this loop iterates and only erases
-    // but the next loop inserts elements
     std::sort(discard_remotes.begin(), discard_remotes.end());
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
       const auto drit = binary_find(discard_remotes, it->first);
@@ -1202,13 +1246,6 @@ int main(int argc, char *argv[]) {
         ++it;
       }
     }
-
-    // replace remotes (after cleanup -> lesser remotes to process)
-    for(const auto &i : tr_remotes) {
-      remotes[i.second] = std::move(remotes[i.first]);
-      remotes.erase(i.first);
-    }
-    tr_remotes.clear();
 
     uniquify(found_remotes);
     if(found_remotes.size() < zprd_conf.remotes.size()) {
@@ -1232,5 +1269,19 @@ int main(int argc, char *argv[]) {
     fflush(stderr);
   }
 
-  return 0;
+  // shutdown the sender thread
+  sender.stop();
+
+  // notify our peers that we quit
+  puts("ROUTER: disconnect from peers");
+  zprn msg;
+  msg.zprn_cmd = ZPRN_CONNMGMT;
+  msg.zprn_prio = ZPRN_CONNMGMT_CLOSE;
+  msg.zprn_un.route.dsta = local_ip.s_addr;
+  send_zprn_msg(msg);
+  puts("QUIT");
+  fflush(stdout);
+  fflush(stderr);
+
+  return retcode;
 }
