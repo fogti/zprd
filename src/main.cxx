@@ -61,7 +61,7 @@
 #include "zsig.h"
 
 // buffer for reading from tun/tap interface, must be greater than 1500
-#define BUFSIZE 65536
+#define BUFSIZE 0xffff
 
 using namespace std;
 
@@ -222,9 +222,6 @@ class sender_t final {
   mutex _mtx;
   condition_variable _cond;
   bool _stop;
-
-  // thread (should come last)
-  thread _worker;
 
   void handle_data(const send_data &dat) const noexcept;
   void worker_fn() noexcept;
@@ -537,7 +534,7 @@ void sender_t::worker_fn() noexcept {
     {
       unique_lock<mutex> lock(_mtx);
       _cond.wait(lock, [this] { return _stop || !_tasks.empty(); });
-      if(_stop || _tasks.empty()) return;
+      if(_tasks.empty()) return;
       dat = std::move(_tasks.front());
       _tasks.pop();
     }
@@ -547,9 +544,10 @@ void sender_t::worker_fn() noexcept {
 }
 
 sender_t::sender_t()
-  : _stop(false), _worker(&sender_t::worker_fn, this) { }
+  : _stop(false) { std::thread(&sender_t::worker_fn, this).detach(); }
 
 void sender_t::enqueue(send_data &&dat) {
+  dat.rdests.shrink_to_fit();
   {
     lock_guard<mutex> lock(_mtx);
 
@@ -564,11 +562,9 @@ void sender_t::enqueue(send_data &&dat) {
 void sender_t::stop() noexcept {
   {
     lock_guard<mutex> lock(_mtx);
-    if(_stop) return;
     _stop = true;
   }
   _cond.notify_all();
-  _worker.join();
 }
 
 enum zprd_icmpe {
@@ -580,8 +576,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   char buffer[buflen] = { 0 };
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
-  const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
-
   h_ip->ip_v   = 4;
   h_ip->ip_hl  = 5;
   h_ip->ip_tos = 0;
@@ -590,11 +584,14 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   h_ip->ip_off = 0;
   h_ip->ip_ttl = MAXTTL;
   h_ip->ip_p   = IPPROTO_ICMP;
-
   h_ip->ip_src = local_ip;
   h_ip->ip_dst = orig_hip->ip_src;
   h_ip->ip_sum = 0;
 
+  // calculate ip checksum
+  auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
+
+  const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
   h_icmp->code = 0;
   h_icmp->checksum = 0;
 
@@ -621,9 +618,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 
   // calculate icmp checksum
   auto fut_icmp_sum = threadpool.enqueue([h_icmp] { return IN_CKSUM(h_icmp); });
-
-  // calculate ip checksum
-  auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
 
   // setup payload = orig ip header
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
@@ -777,6 +771,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
 
   // get route to destination
   vector<uint32_t> ret;
+
   if(is_broadcast) {
     ret.reserve(remotes.size() + 1);
     for(const auto &i : remotes) ret.push_back(i.first);
@@ -938,13 +933,13 @@ inline bool is_zprn_packet(const char * const source_desc_c, const char buffer[]
  * reads an variable length ipv4 packet
  *
  * @param srca    (out) the source ip
- * @param buffer  (out) the target storage (with size BUFSIZE)
- * @param len     (out) the length of the packet
+ * @param buffer  (out) the target storage (with size len)
+ * @param len     (in/out) the length of the packet
  * @ret           succesful marker
  **/
 static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   struct sockaddr_in source;
-  const uint16_t nread = recv_n(server_fd, buffer, BUFSIZE, &source);
+  const uint16_t nread = recv_n(server_fd, buffer, len, &source);
   srca = source.sin_addr;
 
   const string source_desc = get_remote_desc(srca.s_addr);
@@ -1151,6 +1146,7 @@ int main(int argc, char *argv[]) {
       if(FD_ISSET(server_fd, &rd_set)) {
         struct in_addr addr;
         // data from the network: read it, and write it to the tun/tap interface.
+        nread = BUFSIZE;
         if(read_packet(addr, buffer, nread))
           route_packet(addr.s_addr, buffer, nread);
       }
@@ -1269,9 +1265,6 @@ int main(int argc, char *argv[]) {
     fflush(stderr);
   }
 
-  // shutdown the sender thread
-  sender.stop();
-
   // notify our peers that we quit
   puts("ROUTER: disconnect from peers");
   zprn msg;
@@ -1282,6 +1275,9 @@ int main(int argc, char *argv[]) {
   puts("QUIT");
   fflush(stdout);
   fflush(stderr);
+
+  // shutdown the sender thread
+  sender.stop();
 
   return retcode;
 }
