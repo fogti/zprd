@@ -244,6 +244,8 @@ class sender_t final {
   condition_variable _cond;
   bool _stop;
 
+  thread _worker;
+
   void worker_fn() noexcept;
 
  public:
@@ -586,7 +588,7 @@ void sender_t::worker_fn() noexcept {
 }
 
 sender_t::sender_t()
-  : _stop(false) { std::thread(&sender_t::worker_fn, this).detach(); }
+  : _stop(false), _worker(&sender_t::worker_fn, this) { }
 
 void sender_t::enqueue(send_data &&dat) {
   dat.dests.shrink_to_fit();
@@ -600,9 +602,11 @@ void sender_t::enqueue(send_data &&dat) {
 void sender_t::stop() noexcept {
   {
     lock_guard<mutex> lock(_mtx);
+    if(_stop) return;
     _stop = true;
   }
   _cond.notify_all();
+  _worker.join();
 }
 
 enum zprd_icmpe {
