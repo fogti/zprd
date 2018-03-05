@@ -1303,12 +1303,13 @@ int main(int argc, char *argv[]) {
   msg.zprn_prio = ZPRN_CONNMGMT_CLOSE;
   msg.zprn_un.route.dsta = local_ip.s_addr;
   send_zprn_msg(msg);
-  puts("QUIT");
-  fflush(stdout);
-  fflush(stderr);
 
   // shutdown the sender thread
   sender.stop();
+
+  puts("QUIT");
+  fflush(stdout);
+  fflush(stderr);
 
   return retcode;
 }
