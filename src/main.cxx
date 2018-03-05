@@ -507,38 +507,38 @@ void uniquify(TCont &c) {
   c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
+static void set_df(const bool cdf, bool &df) noexcept {
+  const int tmp_df = cdf ?
+# if defined(IP_DONTFRAG)
+    1 : 0;
+  if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
+    perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
+# elif defined(IP_MTU_DISCOVER)
+    IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
+  if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
+    perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
+# else
+#  warning "set_ip_df: no method available to manage the dont-frag bit"
+    0 : 0;
+  if(0) {}
+# endif
+  else df = cdf;
+}
+
+static void set_tos(const uint8_t ctos, uint8_t &tos) noexcept {
+  if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
+    perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+  else tos = ctos;
+}
+
 void sender_t::worker_fn() noexcept {
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
 
-  bool df;
-  uint8_t tos;
+  bool df = false;
+  uint8_t tos = 0;
 
-  static const auto s_df = [&df](const bool cdf) {
-    const int tmp_df = cdf ?
-# if defined(IP_DONTFRAG)
-      1 : 0;
-    if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
-# elif defined(IP_MTU_DISCOVER)
-      IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
-    if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
-# else
-#  warning "set_ip_df: no method available to manage the dont-frag bit"
-      0 : 0;
-    if(0) {}
-# endif
-    else df = cdf;
-  };
-
-  static const auto s_tos = [&tos](const uint8_t ctos) {
-    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
-    else tos = ctos;
-  };
-
-  s_df(false);
-  s_tos(0);
+  set_df(false, df);
+  set_tos(0, tos);
 
   send_data dat;
 
@@ -567,11 +567,11 @@ void sender_t::worker_fn() noexcept {
       // setup outer Dont-Frag bit
       {
         const bool cdf = dat.frag & htons(IP_DF);
-        if(df != cdf) s_df(cdf);
+        if(df != cdf) set_df(cdf, df);
       }
 
       // setup outer TOS
-      if(tos != dat.tos) s_tos(dat.tos);
+      if(tos != dat.tos) set_tos(dat.tos, tos);
 
       struct sockaddr_in dsta;
       memset(&dsta, 0, sizeof(dsta));
@@ -952,7 +952,7 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
  * @param len     the length of the packet
  * @ret           is valid
  **/
-inline bool is_zprn_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) noexcept {
+inline bool is_zprn_packet(const char buffer[], const uint16_t len) noexcept {
   return (sizeof(struct zprn) <= len) && reinterpret_cast<const zprn*>(buffer)->valid();
 }
 
@@ -972,7 +972,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   const string source_desc = get_remote_desc(srca.s_addr);
   const char * const source_desc_c = source_desc.c_str();
 
-  if(is_zprn_packet(source_desc_c, buffer, nread)) {
+  if(is_zprn_packet(buffer, nread)) {
     const auto d_zprn = reinterpret_cast<const struct zprn*>(buffer);
     switch(d_zprn->zprn_cmd) {
       case ZPRN_ROUTEMOD:
