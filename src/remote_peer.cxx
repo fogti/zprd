@@ -7,14 +7,16 @@
 #include "remote_peer.hpp"
 #include "zprd_conf.hpp"
 
+extern time_t last_time;
+
 remote_peer_t::remote_peer_t() noexcept
-  : seen(time(0)), cent(-1) { }
+  : seen(last_time), cent(-1) { }
 
 remote_peer_t::remote_peer_t(const size_t cfgent) noexcept
-  : seen(time(0)), cent(static_cast<ssize_t>(cfgent)) { }
+  : seen(last_time), cent(static_cast<ssize_t>(cfgent)) { }
 
 void remote_peer_t::refresh() noexcept {
-  seen = time(0);
+  seen = last_time;
 }
 
 const char *remote_peer_t::cfgent_name() const {

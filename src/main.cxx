@@ -67,6 +67,7 @@
 using namespace std;
 
 zprd_conf_t zprd_conf;
+time_t last_time;
 
 struct via_router_t final {
   uint32_t addr;
@@ -75,7 +76,7 @@ struct via_router_t final {
   uint8_t  hops;
 
   via_router_t(const uint32_t _addr, const uint8_t _hops)
-    : addr(_addr), seen(time(0)), latency(0), hops(_hops) { }
+    : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
 };
 
 // collection of via_route_t's
@@ -88,7 +89,7 @@ struct route_via_t final {
   // deletes all outdates routers and sort routers
   template<typename Fn>
   void cleanup(const Fn f) {
-    const auto ct = time(0) - 2 * zprd_conf.remote_timeout;
+    const auto ct = last_time - 2 * zprd_conf.remote_timeout;
     _routers.remove_if(
       [ct,f](const via_router_t &a) {
         if(ct < a.seen) return false;
@@ -128,7 +129,7 @@ struct route_via_t final {
     if(ret) {
       _routers.emplace_front(router, hops);
     } else {
-      it->seen = time(0);
+      it->seen = last_time;
       it->hops = hops;
     }
     return ret;
@@ -141,7 +142,7 @@ struct route_via_t final {
       }
     );
     if(it == _routers.end()) return;
-    it->seen = time(0);
+    it->seen = last_time;
     it->hops = hops;
     it->latency = latency;
   }
@@ -245,7 +246,6 @@ class sender_t final {
   condition_variable _cond;
   bool _stop;
 
-  void handle_data(const send_data &dat) const noexcept;
   void worker_fn() noexcept;
 
  public:
@@ -409,7 +409,8 @@ static bool init_all(const string &confpath) {
   }
 
   chdir("/");
-  srand(time(0));
+  // last_time must be set before any call to routing classes happen
+  srand((last_time = time(0)));
 
   // init tundev
   {
@@ -506,54 +507,41 @@ void uniquify(TCont &c) {
   c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
-/** set_ip_df
- * sets or unsets the dont-frag bit in the outer ip header
- **/
-static void set_ip_df(const uint8_t frag) noexcept {
-  const bool df = frag & htons(IP_DF);
-  const int tmp_df = df ?
-#if defined(IP_DONTFRAG)
-    1 : 0;
-  if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
-#elif defined(IP_MTU_DISCOVER)
-    IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
-  if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
-#else
-# warning "set_ip_df: no method available to manage the dont-frag bit"
-    0 : 0;
-#endif
-}
-
-void sender_t::handle_data(const send_data &dat) const noexcept {
-  // setup outer header
-  set_ip_df(dat.frag);
-
-  if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &dat.tos, 1) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
-
-  // send data
-  const auto buf = dat.buffer.data();
-  const auto buflen = dat.buffer.size();
-  if(dat.islcldest)
-    cwrite(local_fd, buf, buflen);
-
-  struct sockaddr_in dsta;
-  memset(&dsta, 0, sizeof(dsta));
-  dsta.sin_family = AF_INET;
-  dsta.sin_port   = htons(zprd_conf.data_port);
-
-  for(const auto &i : dat.rdests) {
-    dsta.sin_addr.s_addr = i;
-    csendto(server_fd, buf, buflen, &dsta);
-  }
-}
-
 void sender_t::worker_fn() noexcept {
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
 
+  bool df;
+  uint8_t tos;
+
+  static const auto s_df = [&df](const bool cdf) {
+    const int tmp_df = cdf ?
+# if defined(IP_DONTFRAG)
+      1 : 0;
+    if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
+# elif defined(IP_MTU_DISCOVER)
+      IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
+    if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
+# else
+#  warning "set_ip_df: no method available to manage the dont-frag bit"
+      0 : 0;
+    if(0) {}
+# endif
+    else df = cdf;
+  };
+
+  static const auto s_tos = [&tos](const uint8_t ctos) {
+    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+    else tos = ctos;
+  };
+
+  s_df(false);
+  s_tos(0);
+
   send_data dat;
+
   while(1) {
     {
       unique_lock<mutex> lock(_mtx);
@@ -563,7 +551,30 @@ void sender_t::worker_fn() noexcept {
       _tasks.pop();
     }
 
-    handle_data(dat);
+    // setup outer Dont-Frag bit
+    {
+      const bool cdf = dat.frag & htons(IP_DF);
+      if(df != cdf) s_df(cdf);
+    }
+
+    // setup outer TOS
+    if(tos != dat.tos) s_tos(dat.tos);
+
+    // send data
+    const auto buf = dat.buffer.data();
+    const auto buflen = dat.buffer.size();
+    if(dat.islcldest)
+      cwrite(local_fd, buf, buflen);
+
+    struct sockaddr_in dsta;
+    memset(&dsta, 0, sizeof(dsta));
+    dsta.sin_family = AF_INET;
+    dsta.sin_port   = htons(zprd_conf.data_port);
+
+    for(const auto &i : dat.rdests) {
+      dsta.sin_addr.s_addr = i;
+      csendto(server_fd, buf, buflen, &dsta);
+    }
   }
 }
 
@@ -574,11 +585,7 @@ void sender_t::enqueue(send_data &&dat) {
   dat.rdests.shrink_to_fit();
   {
     lock_guard<mutex> lock(_mtx);
-
-    if(_stop)
-      handle_data(dat);
-    else
-      _tasks.emplace(std::move(dat));
+    _tasks.emplace(std::move(dat));
   }
   _cond.notify_one();
 }
@@ -1142,6 +1149,11 @@ int main(int argc, char *argv[]) {
   unordered_map<uint32_t, uint32_t> tr_remotes;
 
   while(!b_do_shutdown) {
+    /* last_time - global time, updated after select
+       pastt - time before select
+       curt  - time after select
+      */
+    const auto pastt = last_time;
     { // use select() to handle two descriptors at once
       fd_set rd_set;
       FD_ZERO(&rd_set);
@@ -1154,6 +1166,8 @@ int main(int argc, char *argv[]) {
         retcode = 1;
         break;
       }
+
+      last_time = time(0);
 
       uint16_t nread;
       char buffer[BUFSIZE];
@@ -1181,9 +1195,11 @@ int main(int argc, char *argv[]) {
       printf("%s (outdated)\n", d.c_str());
     };
 
+    // only cleanup things if at least 1 second passed since last iteration
+    if(last_time == pastt) continue;
+    const auto curt = last_time;
 
     {
-      const auto curt = time(0);
       for(auto &i : remotes) {
         if(i.second.cent != -1)
           found_remotes.push_back(i.second.cent);
@@ -1240,9 +1256,6 @@ int main(int argc, char *argv[]) {
 
       if(!ise.empty()) ++it;
     }
-
-    // flush output
-    fflush(stdout);
 
     // replace remotes (after cleanup -> lesser remotes to process)
     // we can't merge this loop and the following, because this loop iterates and only inserts
