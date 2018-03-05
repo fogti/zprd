@@ -208,31 +208,29 @@ struct negative_route final {
 
 struct send_data final {
   vector<char> buffer;
-  vector<uint32_t> rdests;
-  uint8_t frag, tos;
-  bool islcldest;
+  vector<uint32_t> dests;
+  uint16_t frag;
+  uint8_t  tos;
 
-  send_data() noexcept
-    : frag(0), tos(0), islcldest(false) { }
+  send_data() noexcept: frag(0), tos(0) { }
 
   send_data(const send_data &o) = default;
 
   send_data(send_data &&o) noexcept
-    : buffer(move(o.buffer)), rdests(move(o.rdests)),
-      frag(o.frag), tos(o.tos), islcldest(o.islcldest) { }
+    : buffer(move(o.buffer)), dests(move(o.dests)),
+      frag(o.frag), tos(o.tos) { }
 
-  send_data(vector<char> &&buf, vector<uint32_t> &&rd, const uint8_t frag_ = 0,
-            const uint8_t tos_ = 0, const bool lcld = false) noexcept
-    : buffer(move(buf)), rdests(move(rd)), frag(frag_), tos(tos_), islcldest(lcld) { }
+  send_data(vector<char> &&buf, vector<uint32_t> &&d,
+            const uint16_t frag_ = 0, const uint8_t tos_ = 0) noexcept
+    : buffer(move(buf)), dests(move(d)), frag(frag_), tos(tos_) { }
 
   send_data& operator=(const send_data &o) = default;
 
   send_data& operator=(send_data &&o) noexcept {
     if(this != &o) {
       buffer = move(o.buffer);
-      rdests = move(o.rdests);
+      dests  = move(o.dests);
       frag = o.frag; tos = o.tos;
-      islcldest = o.islcldest;
     }
     return *this;
   }
@@ -554,10 +552,16 @@ void sender_t::worker_fn() noexcept {
     // send data
     const auto buf = dat.buffer.data();
     const auto buflen = dat.buffer.size();
-    if(dat.islcldest && write(local_fd, buf, buflen) < 0)
-      perror("write()");
+    {
+      const auto it = binary_find(dat.dests, local_ip.s_addr);
+      if(it != dat.dests.end()) {
+        dat.dests.erase(it);
+        if(write(local_fd, buf, buflen) < 0)
+          perror("write()");
+      }
+    }
 
-    if(!dat.rdests.empty()) {
+    if(!dat.dests.empty()) {
       // setup outer Dont-Frag bit
       {
         const bool cdf = dat.frag & htons(IP_DF);
@@ -572,7 +576,7 @@ void sender_t::worker_fn() noexcept {
       dsta.sin_family = AF_INET;
       dsta.sin_port   = htons(zprd_conf.data_port);
 
-      for(const auto &i : dat.rdests) {
+      for(const auto &i : dat.dests) {
         dsta.sin_addr.s_addr = i;
         if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
           perror("sendto()");
@@ -585,7 +589,7 @@ sender_t::sender_t()
   : _stop(false) { std::thread(&sender_t::worker_fn, this).detach(); }
 
 void sender_t::enqueue(send_data &&dat) {
-  dat.rdests.shrink_to_fit();
+  dat.dests.shrink_to_fit();
   {
     lock_guard<mutex> lock(_mtx);
     _tasks.emplace(std::move(dat));
@@ -607,7 +611,7 @@ enum zprd_icmpe {
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
   constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  send_data dat({buflen, 0}, {});
+  send_data dat({buflen, 0}, {source_ip});
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
@@ -661,11 +665,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   memcpy(buffer + 2 * sizeof(struct ip) + sizeof(struct icmphdr),
          orig_hip + sizeof(ip),
          std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
-
-  if(source_ip == local_ip.s_addr)
-    dat.islcldest = true;
-  else
-    dat.rdests = {source_ip};
 
   h_icmp->checksum = fut_icmp_sum.get();
   h_ip->ip_sum     = fut_ip_sum.get();
@@ -902,19 +901,8 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
       }
     }
 
-    if(!ret.empty()) {
-      send_data dat({buffer, buffer + buflen}, {}, h_ip->ip_off, h_ip->ip_tos);
-
-      if(iam_ep) {
-        const auto it = binary_find(ret, local_ip.s_addr);
-        if(it != ret.end()) {
-          ret.erase(it);
-          dat.islcldest = true;
-        }
-      }
-      dat.rdests = move(ret);
-      sender.enqueue(move(dat));
-    }
+    if(!ret.empty())
+      sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
   }
 }
 
