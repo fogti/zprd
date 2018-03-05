@@ -242,14 +242,11 @@ class sender_t final {
   // sync
   mutex _mtx;
   condition_variable _cond;
-  bool _stop;
-
-  thread *_worker;
+  bool _stop = false;
 
   void worker_fn() noexcept;
 
  public:
-  sender_t();
   ~sender_t() noexcept { stop(); }
 
   void enqueue(send_data &&dat);
@@ -587,11 +584,12 @@ void sender_t::worker_fn() noexcept {
           perror("sendto()");
       }
     }
+
+    // flush output
+    fflush(stdout);
+    fflush(stderr);
   }
 }
-
-sender_t::sender_t()
-  : _stop(false), _worker(nullptr) { }
 
 void sender_t::enqueue(send_data &&dat) {
   dat.dests.shrink_to_fit();
@@ -603,25 +601,19 @@ void sender_t::enqueue(send_data &&dat) {
 }
 
 void sender_t::start() {
-  if(_worker) return;
-
   {
     lock_guard<mutex> lock(_mtx);
     _stop = false;
   }
-  _worker = new thread{&sender_t::worker_fn, this};
+  thread(&sender_t::worker_fn, this).detach();
 }
 
 void sender_t::stop() noexcept {
-  if(!_worker) return;
   {
     lock_guard<mutex> lock(_mtx);
     _stop = true;
   }
   _cond.notify_all();
-  _worker->join();
-  delete _worker;
-  _worker = nullptr;
 }
 
 enum zprd_icmpe {
