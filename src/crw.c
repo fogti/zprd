@@ -2,7 +2,7 @@
  * crw.c controlled read/write functions
  *
  * (C) 2010 Davide Brini.
- * (C) 2017 Erik Zscheile.
+ * (C) 2017 - 2018 Erik Zscheile.
  *
  * License: GPL-3
  *
@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <net/if.h>
 #include <sys/types.h>
@@ -55,46 +56,23 @@ int tun_alloc(char *dev, const int flags) {
   return fd;
 }
 
-static int crw_end(const int cnt, const char * const action, const int fd) {
-  if(cnt >= 0) return cnt;
-  perror(action);
-  printf("  %s fd = %d\n", action, fd);
-  exit(1);
-}
-
 int cread(const int fd, char *buf, const size_t n) {
-  return crw_end(
-    read(fd, buf, n),
-    "read()", fd
-  );
-}
-
-int cwrite(const int fd, const char *buf, const size_t n) {
-  return crw_end(
-    write(fd, buf, n),
-    "write()", fd
-  );
+  {
+    const int cnt = read(fd, buf, n);
+    if(cnt >= 0) return cnt;
+  }
+  printf("read() from fd %d failed: %s", fd, strerror(errno));
+  perror("read()");
+  exit(1);
 }
 
 // additional functions needed for work with UDP
 
-int crecvfrom(const int fd, char *buf, const size_t n, struct sockaddr_in *addr) {
-  socklen_t addrlen = sizeof(*addr);
-  return crw_end(
-    recvfrom(fd, buf, n, 0, (struct sockaddr *) addr, &addrlen),
-    "recvfrom()", fd
-  );
-}
-
-int csendto(const int fd, const char *buf, const size_t n, const struct sockaddr_in *addr) {
-  return crw_end(
-    sendto(fd, buf, n, 0, (struct sockaddr *) addr, sizeof(*addr)),
-    "sendto()", fd
-  );
-}
-
 int recv_n(const int fd, char *buf, const size_t n, struct sockaddr_in *addr) {
-  int cnt;
-  while(!(cnt = crecvfrom(fd, buf, n, addr))) ;
-  return cnt;
+  while(1) {
+    socklen_t addrlen = sizeof(*addr);
+    const int cnt = recvfrom(fd, buf, n, 0, (struct sockaddr *) addr, &addrlen);
+    if(cnt > 0) return cnt;
+  }
+  return -1;
 }

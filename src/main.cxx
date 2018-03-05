@@ -551,29 +551,32 @@ void sender_t::worker_fn() noexcept {
       _tasks.pop();
     }
 
-    // setup outer Dont-Frag bit
-    {
-      const bool cdf = dat.frag & htons(IP_DF);
-      if(df != cdf) s_df(cdf);
-    }
-
-    // setup outer TOS
-    if(tos != dat.tos) s_tos(dat.tos);
-
     // send data
     const auto buf = dat.buffer.data();
     const auto buflen = dat.buffer.size();
-    if(dat.islcldest)
-      cwrite(local_fd, buf, buflen);
+    if(dat.islcldest && write(local_fd, buf, buflen) < 0)
+      perror("write()");
 
-    struct sockaddr_in dsta;
-    memset(&dsta, 0, sizeof(dsta));
-    dsta.sin_family = AF_INET;
-    dsta.sin_port   = htons(zprd_conf.data_port);
+    if(!dat.rdests.empty()) {
+      // setup outer Dont-Frag bit
+      {
+        const bool cdf = dat.frag & htons(IP_DF);
+        if(df != cdf) s_df(cdf);
+      }
 
-    for(const auto &i : dat.rdests) {
-      dsta.sin_addr.s_addr = i;
-      csendto(server_fd, buf, buflen, &dsta);
+      // setup outer TOS
+      if(tos != dat.tos) s_tos(dat.tos);
+
+      struct sockaddr_in dsta;
+      memset(&dsta, 0, sizeof(dsta));
+      dsta.sin_family = AF_INET;
+      dsta.sin_port   = htons(zprd_conf.data_port);
+
+      for(const auto &i : dat.rdests) {
+        dsta.sin_addr.s_addr = i;
+        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
+          perror("sendto()");
+      }
     }
   }
 }
