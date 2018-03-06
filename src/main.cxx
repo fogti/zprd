@@ -541,6 +541,10 @@ void sender_t::worker_fn() noexcept {
   set_tos(0, tos);
 
   send_data dat;
+  struct sockaddr_in dsta;
+  memset(&dsta, 0, sizeof(dsta));
+  dsta.sin_family = AF_INET;
+  dsta.sin_port   = htons(zprd_conf.data_port);
 
   while(1) {
     {
@@ -572,11 +576,6 @@ void sender_t::worker_fn() noexcept {
 
       // setup outer TOS
       if(tos != dat.tos) set_tos(dat.tos, tos);
-
-      struct sockaddr_in dsta;
-      memset(&dsta, 0, sizeof(dsta));
-      dsta.sin_family = AF_INET;
-      dsta.sin_port   = htons(zprd_conf.data_port);
 
       for(const auto &i : dat.dests) {
         dsta.sin_addr.s_addr = i;
@@ -1061,16 +1060,16 @@ static string format_time(const time_t x) {
 static void print_routing_table(int) {
   puts("-- connected peers:");
   puts("Peer\t\tSeen\t\tConfig Entry");
-  for(auto &&i: remotes) {
+  for(const auto &i: remotes) {
     const auto seen = format_time(i.second.seen);
     printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
     puts(i.second.cfgent_name());
   }
   puts("-- routing table:");
   puts("Destination\tGateway\t\tSeen\t\tLatency\tHops");
-  for(auto &&i: routes) {
+  for(const auto &i: routes) {
     const string dest = inet_ntoa({i.first});
-    for(auto &&r: i.second._routers) {
+    for(const auto &r: i.second._routers) {
       const string gateway = inet_ntoa({r.addr});
       const auto seen = format_time(r.seen);
       printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
@@ -1200,37 +1199,35 @@ int main(int argc, char *argv[]) {
     if(last_time == pastt) continue;
     const auto curt = last_time;
 
-    {
-      for(auto &i : remotes) {
-        if(i.second.cent != -1)
-          found_remotes.push_back(i.second.cent);
+    for(auto &i : remotes) {
+      if(i.second.cent != -1)
+        found_remotes.push_back(i.second.cent);
 
-        bool discard = true;
+      bool discard = true;
 
-        // skip local, and remotes which aren't timed out
-        if(i.first == local_ip.s_addr || (curt - zprd_conf.remote_timeout) < i.second.seen) {
-          discard = false;
-        } else if(i.second.cent != -1) {
-          // try to update ip
-          struct in_addr remote;
-          if(resolve_hostname(i.second.cfgent_name(), remote)) {
-            i.second.seen = curt;
-            if(remote.s_addr != i.first) {
-              tr_remotes[i.first] = remote.s_addr;
-              for(auto &r: routes)
-                r.second.replace_router(i.first, remote.s_addr);
-            }
-            discard = false;
+      // skip local, and remotes which aren't timed out
+      if(i.first == local_ip.s_addr || (curt - zprd_conf.remote_timeout) < i.second.seen) {
+        discard = false;
+      } else if(i.second.cent != -1) {
+        // try to update ip
+        struct in_addr remote;
+        if(resolve_hostname(i.second.cfgent_name(), remote)) {
+          i.second.seen = curt;
+          if(remote.s_addr != i.first) {
+            tr_remotes[i.first] = remote.s_addr;
+            for(auto &r: routes)
+              r.second.replace_router(i.first, remote.s_addr);
           }
+          discard = false;
         }
+      }
 
-        if(discard) {
-          for(auto &r: routes)
-            if(r.second.del_router(i.first))
-              del_route_msg(r.first, i.first);
+      if(discard) {
+        for(auto &r: routes)
+          if(r.second.del_router(i.first))
+            del_route_msg(r.first, i.first);
 
-          discard_remotes.push_back(i.first);
-        }
+        discard_remotes.push_back(i.first);
       }
     }
 
@@ -1243,28 +1240,27 @@ int main(int argc, char *argv[]) {
       });
 
       auto &ise = it->second;
-      if(ise.empty() || ise._fresh_add) {
+      const bool iee = ise.empty();
+      if(iee || ise._fresh_add) {
         ise._fresh_add = false;
 
         zprn msg;
         msg.zprn_cmd = ZPRN_ROUTEMOD;
         msg.zprn_un.route.dsta = it->first;
-        msg.zprn_prio = (ise.empty()
-          ? ZPRN_ROUTEMOD_DELETE
-          : ise._routers.front().hops);
+        msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
         send_zprn_msg(msg);
 
-        if(ise.empty()) it = routes.erase(it);
+        if(iee) it = routes.erase(it);
       }
 
-      if(!ise.empty()) ++it;
+      if(!iee) ++it;
     }
 
     // replace remotes (after cleanup -> lesser remotes to process)
     // we can't merge this loop and the following, because this loop iterates and only inserts
     // but the next loop erases elements
-    for(const auto &i : tr_remotes) {
-      remotes[i.second] = std::move(remotes[i.first]);
+    for(auto &i : tr_remotes) {
+      remotes[std::move(i.second)] = std::move(remotes[i.first]);
       discard_remotes.push_back(i.first);
     }
     tr_remotes.clear();
