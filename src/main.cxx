@@ -728,7 +728,7 @@ static void send_zprn_msg(const zprn &msg) {
  * @ret             none
  **/
 static void route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
-  remotes[source_peer_ip].refresh();
+  remotes[source_peer_ip].seen = last_time;
 
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
@@ -849,9 +849,8 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
       // to prevent routing loops
       // drop routing table entry, if there is any
       if(const auto route = have_route(ip_dst.s_addr)) {
-        printf("ROUTER: delete route to %s via ", inet_ntoa(ip_dst));
         const auto d = get_remote_desc(route->get_router());
-        printf("%s (invalid)\n", d.c_str());
+        printf("ROUTER: delete route to %s via %s (invalid)\n", inet_ntoa(ip_dst), d.c_str());
         route->del_primary_router();
       }
     }
@@ -1235,6 +1234,8 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    auto fut_ufr = threadpool.enqueue([&found_remotes] { uniquify(found_remotes); });
+
     // cleanup routes, needs to be done after del_router calls
     for(auto it = routes.begin(); it != routes.end();) {
       it->second.cleanup([it, del_route_msg](const uint32_t router) {
@@ -1269,7 +1270,7 @@ int main(int argc, char *argv[]) {
     tr_remotes.clear();
 
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
-    std::sort(discard_remotes.begin(), discard_remotes.end());
+    uniquify(discard_remotes);
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
       const auto drit = binary_find(discard_remotes, it->first);
       if(drit != discard_remotes.end()) {
@@ -1280,7 +1281,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    uniquify(found_remotes);
+    fut_ufr.wait();
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
       for(const auto &r : zprd_conf.remotes) {

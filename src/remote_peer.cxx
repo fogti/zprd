@@ -15,10 +15,6 @@ remote_peer_t::remote_peer_t() noexcept
 remote_peer_t::remote_peer_t(const size_t cfgent) noexcept
   : seen(last_time), cent(static_cast<ssize_t>(cfgent)) { }
 
-void remote_peer_t::refresh() noexcept {
-  seen = last_time;
-}
-
 const char *remote_peer_t::cfgent_name() const {
   if(cent < 0) return "-";
   const auto &r = zprd_conf.remotes;
