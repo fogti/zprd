@@ -62,7 +62,6 @@ int cread(const int fd, char *buf, const size_t n) {
     if(cnt >= 0) return cnt;
   }
   printf("read() from fd %d failed: %s", fd, strerror(errno));
-  perror("read()");
   exit(1);
 }
 

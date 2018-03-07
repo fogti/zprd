@@ -150,11 +150,9 @@ struct route_via_t final {
   /** replace_router:
    *
    * invariant: rold != rnew
-   * timing:
-   *  base:             n (all routers except if we reach both rold + rnew before)
-   *  if o + n found:  +n
+   * timing:    O(n)      (all routers except if we reach both rold + rnew before)
    *
-   * @param rold, rnew   old and new router addr
+   * @param rold, rnew    old and new router addr
    **/
   void replace_router(const uint32_t rold, const uint32_t rnew) {
     const auto it_e = _routers.end();
@@ -955,7 +953,7 @@ inline bool is_zprn_packet(const char buffer[], const uint16_t len) noexcept {
 }
 
 /** read_packet
- * reads an variable length ipv4 packet
+ * reads an variable length packet
  *
  * @param srca    (out) the source ip
  * @param buffer  (out) the target storage (with size len)
@@ -1070,8 +1068,7 @@ static void print_routing_table(int) {
   for(const auto &i: routes) {
     const string dest = inet_ntoa({i.first});
     for(const auto &r: i.second._routers) {
-      const string gateway = inet_ntoa({r.addr});
-      const auto seen = format_time(r.seen);
+      const string gateway = inet_ntoa({r.addr}), seen = format_time(r.seen);
       printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
@@ -1190,9 +1187,8 @@ int main(int argc, char *argv[]) {
 
     const auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
       // discard route
-      printf("ROUTER: delete route to %s via ", inet_ntoa({addr}));
       const auto d = get_remote_desc(router);
-      printf("%s (outdated)\n", d.c_str());
+      printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr}), d.c_str());
     };
 
     // only cleanup things if at least 1 second passed since last iteration
@@ -1249,11 +1245,11 @@ int main(int argc, char *argv[]) {
         msg.zprn_un.route.dsta = it->first;
         msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
         send_zprn_msg(msg);
-
-        if(iee) it = routes.erase(it);
       }
 
-      if(!iee) ++it;
+      // NOTE: don't use *it after erase (see Issue #1)
+      if(iee) it = routes.erase(it);
+      else ++it;
     }
 
     // replace remotes (after cleanup -> lesser remotes to process)
