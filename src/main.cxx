@@ -618,14 +618,14 @@ enum zprd_icmpe {
 };
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
-  constexpr const uint16_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  send_data dat({buflen, 0}, {source_ip});
+  constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
+  send_data dat(vector<char>{buflen, 0}, {source_ip});
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   h_ip->ip_v   = 4;
   h_ip->ip_hl  = 5;
-  h_ip->ip_len = htons(buflen);
+  h_ip->ip_len = htons(static_cast<uint16_t>(buflen));
   h_ip->ip_id  = rand();
   h_ip->ip_ttl = MAXTTL;
   h_ip->ip_p   = IPPROTO_ICMP;
