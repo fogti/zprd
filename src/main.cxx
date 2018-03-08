@@ -505,40 +505,40 @@ void uniquify(TCont &c) {
   c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
-static void set_df(const bool cdf, bool &df) noexcept {
-  const int tmp_df = cdf ?
-# if defined(IP_DONTFRAG)
-    1 : 0;
-  if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
-# elif defined(IP_MTU_DISCOVER)
-    IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
-  if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
-# else
-#  warning "set_ip_df: no method available to manage the dont-frag bit"
-    0 : 0;
-  if(0) {}
-# endif
-  else df = cdf;
-}
-
-static void set_tos(const uint8_t ctos, uint8_t &tos) noexcept {
-  if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
-    perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
-  else tos = ctos;
-}
-
 void sender_t::worker_fn() noexcept {
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
 
   bool df = false;
   uint8_t tos = 0;
 
-  set_df(false, df);
-  set_tos(0, tos);
+  const auto set_df = [&df](const bool cdf) noexcept {
+    const int tmp_df = cdf ?
+# if defined(IP_DONTFRAG)
+      1 : 0;
+    if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
+# elif defined(IP_MTU_DISCOVER)
+      IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
+    if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
+# else
+#  warning "set_ip_df: no method available to manage the dont-frag bit"
+      0 : 0;
+    if(0) {}
+# endif
+    else df = cdf;
+  };
 
-  send_data dat;
+  const auto set_tos = [&tos](const uint8_t ctos) noexcept {
+    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
+      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+    else tos = ctos;
+  };
+
+  set_df(false);
+  set_tos(0);
+
+  queue<send_data> tasks;
   struct sockaddr_in dsta;
   memset(&dsta, 0, sizeof(dsta));
   dsta.sin_family = AF_INET;
@@ -549,37 +549,40 @@ void sender_t::worker_fn() noexcept {
       unique_lock<mutex> lock(_mtx);
       _cond.wait(lock, [this] { return _stop || !_tasks.empty(); });
       if(_tasks.empty()) return;
-      dat = std::move(_tasks.front());
-      _tasks.pop();
+      _tasks.swap(tasks);
     }
 
     // send data
-    const auto buf = dat.buffer.data();
-    const auto buflen = dat.buffer.size();
-    {
-      const auto it = binary_find(dat.dests, local_ip.s_addr);
-      if(it != dat.dests.end()) {
-        dat.dests.erase(it);
-        if(write(local_fd, buf, buflen) < 0)
-          perror("write()");
-      }
-    }
-
-    if(!dat.dests.empty()) {
-      // setup outer Dont-Frag bit
+    while(!tasks.empty()) {
+      auto &dat = tasks.front();
+      const auto buf = dat.buffer.data();
+      const auto buflen = dat.buffer.size();
       {
-        const bool cdf = dat.frag & htons(IP_DF);
-        if(df != cdf) set_df(cdf, df);
+        const auto it = binary_find(dat.dests, local_ip.s_addr);
+        if(it != dat.dests.end()) {
+          dat.dests.erase(it);
+          if(write(local_fd, buf, buflen) < 0)
+            perror("write()");
+        }
       }
 
-      // setup outer TOS
-      if(tos != dat.tos) set_tos(dat.tos, tos);
+      if(!dat.dests.empty()) {
+        // setup outer Dont-Frag bit
+        {
+          const bool cdf = dat.frag & htons(IP_DF);
+          if(df != cdf) set_df(cdf);
+        }
 
-      for(const auto &i : dat.dests) {
-        dsta.sin_addr.s_addr = i;
-        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
-          perror("sendto()");
+        // setup outer TOS
+        if(tos != dat.tos) set_tos(dat.tos);
+
+        for(const auto &i : dat.dests) {
+          dsta.sin_addr.s_addr = i;
+          if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
+            perror("sendto()");
+        }
       }
+      tasks.pop();
     }
 
     // flush output
@@ -625,22 +628,17 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   h_ip->ip_v   = 4;
   h_ip->ip_hl  = 5;
-  h_ip->ip_tos = 0;
   h_ip->ip_len = htons(buflen);
   h_ip->ip_id  = rand();
-  h_ip->ip_off = 0;
   h_ip->ip_ttl = MAXTTL;
   h_ip->ip_p   = IPPROTO_ICMP;
   h_ip->ip_src = local_ip;
   h_ip->ip_dst = orig_hip->ip_src;
-  h_ip->ip_sum = 0;
 
   // calculate ip checksum
   auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
 
   const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
-  h_icmp->code = 0;
-  h_icmp->checksum = 0;
 
   switch(msg) {
     case ZICMPM_TTL:
