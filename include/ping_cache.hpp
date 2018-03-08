@@ -1,20 +1,14 @@
 #ifndef PING_CACHE_HPP
 # define PING_CACHE_HPP 1
 # include <inttypes.h>
-# include <functional>
 
 class ping_cache_t final {
  public:
   struct match_t final {
-    static std::function<void(const match_t&)> apply_fn;
     double diff;
     uint32_t dst, router;
     uint8_t hops;
     bool match;
-
-    void apply() const noexcept {
-      if(match && apply_fn) apply_fn(*this);
-    }
   };
 
   struct data_t final {

@@ -51,15 +51,13 @@
 
 // own parts
 #include "addr.hpp"
-#include "cksum.h"
+#include "crest.h"
 #include "crw.h"
 #include "ping_cache.hpp"
-#include "recentpkts.hpp"
 #include "remote_peer.hpp"
 #include "resolve.hpp"
 #include "zprd_conf.hpp"
 #include "zprn.hpp"
-#include "zsig.h"
 
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 0xffff
@@ -75,7 +73,7 @@ struct via_router_t final {
   double   latency;
   uint8_t  hops;
 
-  via_router_t(const uint32_t _addr, const uint8_t _hops)
+  via_router_t(const uint32_t _addr, const uint8_t _hops) noexcept
     : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
 };
 
@@ -99,6 +97,7 @@ struct route_via_t final {
     );
 
     _routers.sort(
+      // place best router in front: low hops, low latency, recent seen
       // priority high to low: hop count > latency > seen time
       [](const via_router_t &a, const via_router_t &b) noexcept {
         return tie(a.hops, a.latency, b.seen) < tie(b.hops, b.latency, a.seen);
@@ -154,7 +153,7 @@ struct route_via_t final {
    *
    * @param rold, rnew    old and new router addr
    **/
-  void replace_router(const uint32_t rold, const uint32_t rnew) {
+  void replace_router(const uint32_t rold, const uint32_t rnew) noexcept {
     const auto it_e = _routers.end();
     auto it_ob = it_e; // (iterator to old router) - 1
     bool nf = true;    // new router not found?
@@ -475,11 +474,6 @@ static route_via_t* have_route(const uint32_t dsta) noexcept {
   );
 }
 
-static void ping_cache_match_apply_fn(const ping_cache_t::match_t &m) noexcept {
-  if(const auto r = have_route(m.dst))
-    r->update_router(m.router, m.hops, m.diff);
-}
-
 // get_remote_desc: returns a description string of socket ip
 static string get_remote_desc(const uint32_t addr) {
   return (addr == local_ip.s_addr)
@@ -503,6 +497,14 @@ template<class TCont>
 void uniquify(TCont &c) {
   std::sort(c.begin(), c.end());
   c.erase(std::unique(c.begin(), c.end()), c.end());
+}
+
+/** get_cksum_fut
+ * returns a future to an in_cksum{ptr...} result
+ **/
+template<class T>
+auto get_cksum_fut(const T *const ptr) -> future<uint16_t> {
+  return threadpool.enqueue([ptr]() noexcept { return IN_CKSUM(ptr); });
 }
 
 void sender_t::worker_fn() noexcept {
@@ -636,7 +638,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   h_ip->ip_dst = orig_hip->ip_src;
 
   // calculate ip checksum
-  auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
+  auto fut_ip_sum = get_cksum_fut(h_ip);
 
   const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
 
@@ -662,7 +664,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   }
 
   // calculate icmp checksum
-  auto fut_icmp_sum = threadpool.enqueue([h_icmp] { return IN_CKSUM(h_icmp); });
+  auto fut_icmp_sum = get_cksum_fut(h_icmp);
 
   // setup payload = orig ip header
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
@@ -771,17 +773,11 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   // decrement ttl
   if(!iam_ep) --(h_ip->ip_ttl);
 
-  // check this late (don't register discarded packets)
-  // use case : two ways to one destination, merge at destination (or before)
-  // check this parallel, as most packets aren't DUPs
   // NOTE: make sure that no changes are done to buffer
   h_ip->ip_sum = 0;
-  auto fut_rctpka = threadpool.enqueue([buffer, buflen] {
-    return RecentPkts_append(reinterpret_cast<const uint8_t*>(buffer), buflen);
-  });
 
   // update checksum (because we changed the header)
-  auto fut_ip_sum = threadpool.enqueue([h_ip] { return IN_CKSUM(h_ip); });
+  auto fut_ip_sum = get_cksum_fut(h_ip);
 
   // update routes
   if(routes[ip_src.s_addr].add_router(
@@ -799,11 +795,6 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   } else if(!have_route(ip_dst.s_addr)) {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
     is_broadcast = true;
-  }
-
-  if(fut_rctpka.get()) {
-    printf("ROUTER WARNING: drop packet %u (DUP!) from %s\n", pkid, source_desc_c);
-    return;
   }
 
   // get route to destination
@@ -898,7 +889,12 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
             break;
 
           case ICMP_ECHOREPLY:
-            ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl).apply();
+            {
+              const auto m = ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl);
+              if(m.match)
+                if(const auto r = have_route(m.dst))
+                  r->update_router(m.router, m.hops, m.diff);
+            }
             break;
 
           default: break;
@@ -1116,7 +1112,6 @@ int main(int argc, char *argv[]) {
   }
 
   b_do_shutdown = false;
-  ping_cache_t::match_t::apply_fn = ping_cache_match_apply_fn;
   my_signal(SIGHUP,  SIG_IGN);
   my_signal(SIGUSR1, print_routing_table);
   fflush(stdout);
