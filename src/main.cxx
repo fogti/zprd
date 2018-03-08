@@ -199,10 +199,6 @@ struct route_via_t final {
   }
 };
 
-struct negative_route final {
-  uint32_t former_router;
-};
-
 struct send_data final {
   vector<char> buffer;
   vector<uint32_t> dests;
@@ -264,9 +260,8 @@ static int local_fd, server_fd;
 static ThreadPool threadpool(std::max(2u, thread::hardware_concurrency()) - 1);
 static sender_t sender;
 
-static unordered_map<uint32_t, remote_peer_t>  remotes;
-static unordered_map<uint32_t, route_via_t>    routes;
-static unordered_map<uint32_t, negative_route> neg_routes;
+static unordered_map<uint32_t, remote_peer_t> remotes;
+static unordered_map<uint32_t, route_via_t> routes;
 static ping_cache_t ping_cache;
 
 static in_addr local_ip, local_netmask;
@@ -694,17 +689,9 @@ static void send_zprn_msg(const zprn &msg) {
   rem_peer(local_ip.s_addr);
 
   // split horizon
-  if(msg.zprn_cmd == ZPRN_ROUTEMOD) {
-    if(msg.zprn_prio == ZPRN_ROUTEMOD_DELETE) {
-      const auto it = neg_routes.find(msg.zprn_un.route.dsta);
-      if(it != neg_routes.end()) {
-        rem_peer(it->second.former_router);
-        neg_routes.erase(it);
-      }
-    } else if(const auto r = have_route(msg.zprn_un.route.dsta)) {
+  if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
+    if(const auto r = have_route(msg.zprn_un.route.dsta))
       rem_peer(r->get_router());
-    }
-  }
 
   const auto msgptr = reinterpret_cast<const char *>(&msg);
   sender.enqueue({{msgptr, msgptr + sizeof(msg)}, move(peers)});
@@ -981,15 +968,10 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
               // a route to us is deleted (and we know we are here)
               msg.zprn_prio = 0;
               send_zprn_msg(msg);
-            } else if(r) {
-              if(r->empty()) {
-                // former router was srca
-                neg_routes[dsta].former_router = srca.s_addr;
-              } else {
-                // we have a route
-                msg.zprn_prio = r->_routers.front().hops;
-                send_zprn_msg(msg);
-              }
+            } else if(r && !r->empty()) {
+              // we have a route
+              msg.zprn_prio = r->_routers.front().hops;
+              send_zprn_msg(msg);
             }
           } else {
             // add route
@@ -1002,11 +984,8 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
       case ZPRN_CONNMGMT:
         if(d_zprn->zprn_prio == ZPRN_CONNMGMT_CLOSE) {
           for(auto &r: routes)
-            if(r.second.del_router(srca.s_addr)) {
+            if(r.second.del_router(srca.s_addr))
               printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({r.first}), source_desc_c);
-              if(r.second.empty())
-                neg_routes[r.first].former_router = srca.s_addr;
-            }
 
           const auto dsta = d_zprn->zprn_un.route.dsta;
           if(const auto r = have_route(dsta)) {
