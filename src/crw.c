@@ -19,15 +19,14 @@
  **/
 
 #include <stdio.h>
-#include <stdlib.h>
+#include <stdlib.h> // exit
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-#include <net/if.h>
+#include <net/if.h> // ifreq, IFNAMSIZ
 #include <sys/types.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <fcntl.h>
+#include <fcntl.h>  // O_RDWR
 #include "crw.h"
 
 int tun_alloc(char *dev, const int flags) {
@@ -52,7 +51,6 @@ int tun_alloc(char *dev, const int flags) {
   }
 
   strcpy(dev, ifr.ifr_name);
-
   return fd;
 }
 

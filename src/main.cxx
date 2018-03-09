@@ -22,16 +22,14 @@
  **/
 
 #define __USE_MISC 1
-#include <pwd.h>
+#include <pwd.h>    // struct passwd
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <net/if.h>
 #include <netinet/ip_icmp.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/select.h>
 #include <sys/prctl.h>
 #include <arpa/inet.h>
