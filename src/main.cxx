@@ -933,6 +933,52 @@ inline bool is_zprn_packet(const char buffer[], const uint16_t len) noexcept {
   return (sizeof(struct zprn) <= len) && reinterpret_cast<const zprn*>(buffer)->valid();
 }
 
+// handlers for incoming ZPRN packets
+typedef void (*zprn_handler_t)(const char * const, const uint32_t, const zprn&);
+
+static void zprn_routemod_handler(const char *const source_desc_c, const uint32_t srca, const zprn &d) {
+  const auto dsta = d.zprn_un.route.dsta;
+  if(d.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
+    // add route
+    if(routes[dsta].add_router(srca, d.zprn_prio + 1))
+      printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
+    return;
+  }
+
+  // delete route
+  const auto r = have_route(dsta);
+  if(r && r->del_router(srca))
+    printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
+
+  bool doit = true;
+  zprn msg;
+  msg.zprn_cmd = ZPRN_ROUTEMOD;
+  msg.zprn_un.route.dsta = dsta;
+
+  if(dsta == local_ip.s_addr) // a route to us is deleted (and we know we are here)
+    msg.zprn_prio = 0;
+  else if(r && !r->empty()) // we have a route
+    msg.zprn_prio = r->_routers.front().hops;
+  else
+    doit = false;
+
+  if(doit) send_zprn_msg(msg);
+}
+
+static void zprn_connmgmt_handler(const char *const source_desc_c, const uint32_t srca, const zprn &d) noexcept {
+  if(d.zprn_prio != ZPRN_CONNMGMT_CLOSE) return;
+
+  for(auto &r: routes)
+    if(r.second.del_router(srca))
+      printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({r.first}), source_desc_c);
+
+  const auto dsta = d.zprn_un.route.dsta;
+  if(const auto r = have_route(dsta)) {
+    r->_routers.clear();
+    printf("ROUTER: delete route to %s (notified)\n", inet_ntoa({dsta}));
+  }
+}
+
 /** read_packet
  * reads an variable length packet
  *
@@ -942,6 +988,11 @@ inline bool is_zprn_packet(const char buffer[], const uint16_t len) noexcept {
  * @ret           succesful marker
  **/
 static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
+  static const unordered_map<uint8_t, zprn_handler_t> zprn_dpt = {
+    { ZPRN_ROUTEMOD, zprn_routemod_handler },
+    { ZPRN_CONNMGMT, zprn_connmgmt_handler },
+  };
+
   struct sockaddr_in source;
   const uint16_t nread = recv_n(server_fd, buffer, len, &source);
   srca = source.sin_addr;
@@ -950,55 +1001,10 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   const char * const source_desc_c = source_desc.c_str();
 
   if(is_zprn_packet(buffer, nread)) {
-    const auto d_zprn = reinterpret_cast<const struct zprn*>(buffer);
-    switch(d_zprn->zprn_cmd) {
-      case ZPRN_ROUTEMOD:
-        {
-          const auto dsta = d_zprn->zprn_un.route.dsta;
-          if(d_zprn->zprn_prio == ZPRN_ROUTEMOD_DELETE) {
-            const auto r = have_route(dsta);
-            // delete route
-            if(r && r->del_router(srca.s_addr))
-              printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
-
-            zprn msg;
-            msg.zprn_cmd = ZPRN_ROUTEMOD;
-            msg.zprn_un.route.dsta = dsta;
-            if(dsta == local_ip.s_addr) {
-              // a route to us is deleted (and we know we are here)
-              msg.zprn_prio = 0;
-              send_zprn_msg(msg);
-            } else if(r && !r->empty()) {
-              // we have a route
-              msg.zprn_prio = r->_routers.front().hops;
-              send_zprn_msg(msg);
-            }
-          } else {
-            // add route
-            if(routes[dsta].add_router(srca.s_addr, d_zprn->zprn_prio + 1))
-              printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
-          }
-        }
-        break;
-
-      case ZPRN_CONNMGMT:
-        if(d_zprn->zprn_prio == ZPRN_CONNMGMT_CLOSE) {
-          for(auto &r: routes)
-            if(r.second.del_router(srca.s_addr))
-              printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({r.first}), source_desc_c);
-
-          const auto dsta = d_zprn->zprn_un.route.dsta;
-          if(const auto r = have_route(dsta)) {
-            r->_routers.clear();
-            printf("ROUTER: delete route to %s (notified)\n", inet_ntoa({dsta}));
-          }
-        }
-
-      default: break;
-    }
-
-    // don't forward
-    return false;
+    const auto d_zprn = *reinterpret_cast<const struct zprn*>(buffer);
+    const auto it = zprn_dpt.find(d_zprn.zprn_cmd);
+    if(it != zprn_dpt.end()) it->second(source_desc_c, srca.s_addr, d_zprn);
+    return false; // don't forward
   }
 
   if(!is_ipv4_packet(source_desc_c, buffer, nread)) return false;
