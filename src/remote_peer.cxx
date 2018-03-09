@@ -18,7 +18,7 @@ remote_peer_t::remote_peer_t(const size_t cfgent) noexcept
 const char *remote_peer_t::cfgent_name() const {
   if(cent < 0) return "-";
   const auto &r = zprd_conf.remotes;
-  const auto ce = static_cast<size_t>(cent);
+  const size_t ce = cent;
   if(ce >= r.size()) return "####";
   return r[ce].c_str();
 }
