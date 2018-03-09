@@ -654,8 +654,8 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
       break;
 
     default:
-      printf("SEND ERROR: invalid ZICMP Message code: %d\n", msg);
-      exit(1);
+      fprintf(stderr, "SEND ERROR: invalid ZICMP Message code: %d\n", msg);
+      return;
   }
 
   // calculate icmp checksum
@@ -922,17 +922,6 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
   return true;
 }
 
-/** is_zprn_packet
- * checks, if packet is a valid ZPRN packet
- *
- * @param buffer  the packet data
- * @param len     the length of the packet
- * @ret           is valid
- **/
-inline bool is_zprn_packet(const char buffer[], const uint16_t len) noexcept {
-  return (sizeof(struct zprn) <= len) && reinterpret_cast<const zprn*>(buffer)->valid();
-}
-
 // handlers for incoming ZPRN packets
 typedef void (*zprn_handler_t)(const char * const, const uint32_t, const zprn&);
 
@@ -1000,7 +989,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   const string source_desc = get_remote_desc(srca.s_addr);
   const char * const source_desc_c = source_desc.c_str();
 
-  if(is_zprn_packet(buffer, nread)) {
+  if(sizeof(struct zprn) <= nread && reinterpret_cast<const zprn*>(buffer)->valid()) {
     const auto d_zprn = *reinterpret_cast<const struct zprn*>(buffer);
     const auto it = zprn_dpt.find(d_zprn.zprn_cmd);
     if(it != zprn_dpt.end()) it->second(source_desc_c, srca.s_addr, d_zprn);
@@ -1209,11 +1198,11 @@ int main(int argc, char *argv[]) {
 
     // cleanup routes, needs to be done after del_router calls
     for(auto it = routes.begin(); it != routes.end();) {
-      it->second.cleanup([it, del_route_msg](const uint32_t router) {
+      auto &ise = it->second;
+      ise.cleanup([it, del_route_msg](const uint32_t router) {
         del_route_msg(it->first, router);
       });
 
-      auto &ise = it->second;
       const bool iee = ise.empty();
       if(iee || ise._fresh_add) {
         ise._fresh_add = false;
