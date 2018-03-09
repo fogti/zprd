@@ -39,8 +39,6 @@
 
 // C++
 #include <atomic>
-#include <forward_list>
-#include <tuple>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
@@ -56,6 +54,7 @@
 #include "ping_cache.hpp"
 #include "remote_peer.hpp"
 #include "resolve.hpp"
+#include "routes.hpp"
 #include "zprd_conf.hpp"
 #include "zprn.hpp"
 
@@ -66,138 +65,6 @@ using namespace std;
 
 zprd_conf_t zprd_conf;
 time_t last_time;
-
-struct via_router_t final {
-  uint32_t addr;
-  time_t   seen;
-  double   latency;
-  uint8_t  hops;
-
-  via_router_t(const uint32_t _addr, const uint8_t _hops) noexcept
-    : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
-};
-
-// collection of via_route_t's
-struct route_via_t final {
-  std::forward_list<via_router_t> _routers;
-  bool _fresh_add;
-
-  route_via_t(): _fresh_add(false) { }
-
-  // deletes all outdates routers and sort routers
-  template<typename Fn>
-  void cleanup(const Fn f) {
-    const auto ct = last_time - 2 * zprd_conf.remote_timeout;
-    _routers.remove_if(
-      [ct,f](const via_router_t &a) {
-        if(ct < a.seen) return false;
-        f(a.addr);
-        return true;
-      }
-    );
-
-    _routers.sort(
-      // place best router in front: low hops, low latency, recent seen
-      // priority high to low: hop count > latency > seen time
-      [](const via_router_t &a, const via_router_t &b) noexcept {
-        return tie(a.hops, a.latency, b.seen) < tie(b.hops, b.latency, a.seen);
-      }
-    );
-  }
-
-  bool empty() const noexcept {
-    return _routers.empty();
-  }
-
-  uint32_t get_router() const noexcept {
-    return _routers.front().addr;
-  }
-
-  // add or modify a router
-  bool add_router(const uint32_t router, const uint8_t hops) {
-    if(empty()) _fresh_add = true;
-
-    const auto it_e = _routers.end();
-    const auto it = find_if(_routers.begin(), it_e,
-      [router](const via_router_t &i) noexcept {
-        return i.addr == router;
-      }
-    );
-
-    const bool ret = (it == it_e);
-    if(ret) {
-      _routers.emplace_front(router, hops);
-    } else {
-      it->seen = last_time;
-      it->hops = hops;
-    }
-    return ret;
-  }
-
-  void update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
-    const auto it = find_if(_routers.begin(), _routers.end(),
-      [router](const via_router_t &i) noexcept {
-        return i.addr == router;
-      }
-    );
-    if(it == _routers.end()) return;
-    it->seen = last_time;
-    it->hops = hops;
-    it->latency = latency;
-  }
-
-  /** replace_router:
-   *
-   * invariant: rold != rnew
-   * timing:    O(n)      (all routers except if we reach both rold + rnew before)
-   *
-   * @param rold, rnew    old and new router addr
-   **/
-  void replace_router(const uint32_t rold, const uint32_t rnew) noexcept {
-    const auto it_e = _routers.end();
-    auto it_ob = it_e; // (iterator to old router) - 1
-    bool nf = true;    // new router not found?
-
-    for(auto it = _routers.begin(), itb = _routers.before_begin(); it != it_e; ++it, ++itb) {
-      if(it->addr == rold)
-        it_ob = itb;
-      else if(it->addr == rnew)
-        nf = false;
-      else
-        continue;
-
-      if(!(nf || it_ob == it_e))
-        break;
-    }
-
-    if(it_ob == it_e) {
-      // found [!o ?n]
-    } else if(nf) {
-      // found [o !n]
-      ++it_ob;
-      it_ob->addr = rnew;
-    } else {
-      // found [o n]
-      _routers.erase_after(it_ob);
-    }
-  }
-
-  bool del_router(const uint32_t router) noexcept {
-    bool ret = false;
-    _routers.remove_if(
-      [router, &ret](const via_router_t &a) noexcept -> bool {
-        const bool tmp = (router == a.addr);
-        ret |= tmp;
-        return tmp;
-      }
-    );
-    return ret;
-  }
-
-  void del_primary_router() noexcept {
-    _routers.pop_front();
-  }
-};
 
 struct send_data final {
   vector<char> buffer;
