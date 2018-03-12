@@ -820,13 +820,17 @@ static void zprn_routemod_handler(const char *const source_desc_c, const uint32_
 }
 
 static void zprn_connmgmt_handler(const char *const source_desc_c, const uint32_t srca, const zprn &d) noexcept {
-  if(d.zprn_prio != ZPRN_CONNMGMT_CLOSE) return;
+  const auto dsta = d.zprn_un.route.dsta;
+  if(d.zprn_prio == ZPRN_CONNMGMT_OPEN) {
+    if(routes[dsta].add_router(srca, 1))
+      printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
+    return;
+  }
 
   for(auto &r: routes)
     if(r.second.del_router(srca))
       printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({r.first}), source_desc_c);
 
-  const auto dsta = d.zprn_un.route.dsta;
   if(const auto r = have_route(dsta)) {
     r->_routers.clear();
     printf("ROUTER: delete route to %s (notified)\n", inet_ntoa({dsta}));
@@ -956,14 +960,12 @@ int main(int argc, char *argv[]) {
   fflush(stdout);
   fflush(stderr);
 
-  {
-    // notify our peers that we are here
-    zprn msg;
-    msg.zprn_cmd = ZPRN_CONNMGMT;
-    msg.zprn_prio = ZPRN_CONNMGMT_OPEN;
-    msg.zprn_un.route.dsta = local_ip.s_addr;
-    send_zprn_msg(msg);
-  }
+  // notify our peers that we are here
+  zprn msg;
+  msg.zprn_cmd = ZPRN_CONNMGMT;
+  msg.zprn_prio = ZPRN_CONNMGMT_OPEN;
+  msg.zprn_un.route.dsta = local_ip.s_addr;
+  send_zprn_msg(msg);
 
   // add route to ourselves to avoid sending two 'ZPRN add route' packets
   routes[local_ip.s_addr].add_router(local_ip.s_addr, 0);
@@ -1072,7 +1074,6 @@ int main(int argc, char *argv[]) {
       if(iee || ise._fresh_add) {
         ise._fresh_add = false;
 
-        zprn msg;
         msg.zprn_cmd = ZPRN_ROUTEMOD;
         msg.zprn_un.route.dsta = it->first;
         msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
@@ -1130,7 +1131,6 @@ int main(int argc, char *argv[]) {
 
   // notify our peers that we quit
   puts("ROUTER: disconnect from peers");
-  zprn msg;
   msg.zprn_cmd = ZPRN_CONNMGMT;
   msg.zprn_prio = ZPRN_CONNMGMT_CLOSE;
   msg.zprn_un.route.dsta = local_ip.s_addr;
