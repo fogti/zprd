@@ -6,7 +6,7 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(USE_TBB "use the Intel Threading Building Blocks library")
+option(USE_TBB "use the Intel Threading Building Blocks library" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
@@ -27,8 +27,8 @@ else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
 endif()
 
-add_executable(zprd src/main.cxx src/crest.c src/crw.c src/ping_cache.cxx
-                    src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx)
+add_executable(zprd src/main.cxx src/cksum.cxx src/crw.c src/ping_cache.cxx
+                    src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx src/zsig.c)
 target_link_libraries(zprd Threads::Threads)
 
 if(${TBB_FOUND})

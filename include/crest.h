@@ -2,13 +2,14 @@
 # define CREST_H 1
 # include <inttypes.h>
 # include <signal.h>
+# include "cwa_noexcept.h"
 # ifdef __cplusplus
 extern "C" {
 # endif
-  uint16_t in_cksum(const uint16_t *ptr, int nbytes);
+  uint16_t in_cksum(const uint16_t *ptr, int nbytes) noexcept;
 
   typedef void (*sighandler_t)(int);
-  void my_signal(const int sig_nr, const sighandler_t sig_handler);
+  void my_signal(const int sig_nr, const sighandler_t sig_handler) noexcept;
 # ifdef __cplusplus
 }
 template<typename T>
