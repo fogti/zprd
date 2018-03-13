@@ -1,6 +1,6 @@
 /**
  * cksum.cxx
- * (C) 2017 Erik Zscheile
+ * (C) 2017 - 2018 Erik Zscheile
  * License: GPL-3
  **/
 

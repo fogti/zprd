@@ -16,17 +16,19 @@ using namespace std;
 via_router_t::via_router_t(const uint32_t _addr, const uint8_t _hops) noexcept
   : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
 
-bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
-  if(empty()) _fresh_add = true;
-
-  const auto it_e = _routers.end();
-  const auto it = find_if(_routers.begin(), it_e,
+typedef std::forward_list<via_router_t> sfl_vrt;
+auto tpl_find_router(sfl_vrt &c, const uint32_t router) -> sfl_vrt::iterator {
+  return find_if(c.begin(), c.end(),
     [router](const via_router_t &i) noexcept {
       return i.addr == router;
     }
   );
+}
 
-  const bool ret = (it == it_e);
+bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
+  if(empty()) _fresh_add = true;
+  const auto it = tpl_find_router(_routers, router);
+  const bool ret = (it == _routers.end());
   if(ret) {
     _routers.emplace_front(router, hops);
   } else {
@@ -37,11 +39,7 @@ bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
 }
 
 void route_via_t::update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
-  const auto it = find_if(_routers.begin(), _routers.end(),
-    [router](const via_router_t &i) noexcept {
-      return i.addr == router;
-    }
-  );
+  const auto it = tpl_find_router(_routers, router);
   if(it == _routers.end()) return;
   it->seen = last_time;
   it->hops = hops;

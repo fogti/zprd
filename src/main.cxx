@@ -347,20 +347,11 @@ static string get_remote_desc(const uint32_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
-/** binary_find:
- * a simple binary search function
- **/
-template<class TCont, class T>
-auto binary_find(TCont &c, const T &value) noexcept -> typename TCont::iterator {
-  const auto it = lower_bound(c.begin(), c.end(), value);
-  return (it != c.end() && *it == value) ? it : c.end();
-}
-
 /** uniquify:
  * make all elems in a container unique
  **/
 template<class TCont>
-void uniquify(TCont &c) {
+void uniquify(TCont &c) noexcept {
 #ifdef TBB_FOUND
   tbb::parallel_sort
 #else
@@ -368,6 +359,39 @@ void uniquify(TCont &c) {
 #endif
     (c.begin(), c.end());
   c.erase(std::unique(c.begin(), c.end()), c.end());
+}
+
+template<class TCont>
+TCont uniquify_move(TCont &&c) noexcept {
+  uniquify(c);
+  return move(c); // move c here because it's an rvalue ref
+}
+
+/** rem_peer_t
+ * a functor which erases a vector item from a sorted vector
+ **/
+template<typename T>
+class rem_peer_t final {
+  vector<T> &_vec;
+
+ public:
+  rem_peer_t(vector<T> &vec) noexcept: _vec(vec) { }
+
+  bool operator()(const T &item) const noexcept {
+    // perform a binary find
+    const auto it = lower_bound(_vec.begin(), _vec.end(), item);
+    if(it == _vec.end() || *it != item) return false;
+    // erase element
+    iter_swap(it, _vec.end() - 1);
+    _vec.erase(_vec.end() - 1);
+    return true;
+  }
+};
+
+// automatic type deducing support for rem_peer_t
+template<typename T>
+auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T> {
+  return {vec};
 }
 
 /** get_map_keys
@@ -441,14 +465,9 @@ void sender_t::worker_fn() noexcept {
       auto &dat = tasks.front();
       const auto buf = dat.buffer.data();
       const auto buflen = dat.buffer.size();
-      {
-        const auto it = binary_find(dat.dests, local_ip.s_addr);
-        if(it != dat.dests.end()) {
-          dat.dests.erase(it);
-          if(write(local_fd, buf, buflen) < 0)
-            perror("write()");
-        }
-      }
+      if(make_rem_peer(dat.dests)(local_ip.s_addr))
+        if(write(local_fd, buf, buflen) < 0)
+          perror("write()");
 
       if(!dat.dests.empty()) {
         // setup outer Dont-Frag bit
@@ -562,13 +581,8 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<uint32_t> peers = get_map_keys(remotes);
-  uniquify(peers);
-
-  const auto rem_peer = [&peers](const uint32_t peer) {
-    const auto it = binary_find(peers, peer);
-    if(it != peers.end()) peers.erase(it);
-  };
+  vector<uint32_t> peers = uniquify_move(get_map_keys(remotes));
+  auto rem_peer = make_rem_peer(peers);
 
   // filter local tun interface
   rem_peer(local_ip.s_addr);
@@ -681,10 +695,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   }
 
   // function to filter a peer
-  const auto rem_peer = [&ret](const uint32_t addr) {
-    const auto it = binary_find(ret, addr);
-    if(it != ret.end()) ret.erase(it);
-  };
+  auto rem_peer = make_rem_peer(ret);
 
   // split horizon
   rem_peer(source_peer_ip);
@@ -1116,23 +1127,22 @@ int main(int argc, char *argv[]) {
 
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
     uniquify(discard_remotes);
-    for(auto it = remotes.cbegin(); it != remotes.cend();) {
-      const auto drit = binary_find(discard_remotes, it->first);
-      if(drit != discard_remotes.end()) {
-        discard_remotes.erase(drit);
-        it = remotes.erase(it);
-      } else {
-        ++it;
+    {
+      auto rem_peer = make_rem_peer(discard_remotes);
+      for(auto it = remotes.cbegin(); it != remotes.cend();) {
+        if(rem_peer(it->first))
+          it = remotes.erase(it);
+        else
+          ++it;
       }
     }
 
     fut_ufr.wait();
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
+      auto rem_peer = make_rem_peer(found_remotes);
       for(const auto &r : zprd_conf.remotes) {
-        const auto frit = binary_find(found_remotes, i);
-        if(frit != found_remotes.end()) {
-          found_remotes.erase(frit);
+        if(rem_peer(i)) {
           struct in_addr remote;
           if(resolve_hostname(r.c_str(), remote)) {
             remotes[remote.s_addr] = {i};
