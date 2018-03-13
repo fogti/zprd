@@ -21,10 +21,10 @@ uint16_t in_cksum(const uint16_t *ptr, int nbytes) noexcept {
     typedef tbb::blocked_range<const uint16_t*> tbr_t;
     const auto eob = ptr + (nbytes / 2);
     sum = tbb::parallel_reduce(
-      tbr_t(ptr, eob), 0u,
-      [](const tbr_t &r, const uint16_t x) noexcept {
+      tbr_t(ptr, eob), 0,
+      [](const tbr_t &r, const long x) noexcept {
         return std::accumulate(r.begin(), r.end(), x);
-      }, std::plus<uint16_t>()
+      }, std::plus<long>()
     );
     ptr = eob;
   }
