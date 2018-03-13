@@ -35,12 +35,18 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
+#include "config.h"
+
 // C++
 #include <atomic>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
 #include <utility>
+
+#ifdef TBB_FOUND
+# include <tbb/parallel_sort.h>
+#endif
 
 // 3rdparty
 #include <ThreadPool.h>
@@ -355,8 +361,24 @@ auto binary_find(TCont &c, const T &value) noexcept -> typename TCont::iterator 
  **/
 template<class TCont>
 void uniquify(TCont &c) {
-  std::sort(c.begin(), c.end());
+#ifdef TBB_FOUND
+  tbb::parallel_sort
+#else
+  std::sort
+#endif
+    (c.begin(), c.end());
   c.erase(std::unique(c.begin(), c.end()), c.end());
+}
+
+/** get_map_keys
+ * generate a vector from the keys of an map
+ **/
+template<class Cont>
+auto get_map_keys(const Cont &c) -> vector<typename Cont::key_type> {
+  vector<typename Cont::key_type> ret;
+  ret.reserve(c.size());
+  for(const auto &i : c) ret.push_back(i.first);
+  return ret;
 }
 
 /** get_cksum_fut
@@ -540,9 +562,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<uint32_t> peers;
-  peers.reserve(remotes.size());
-  for(const auto &i: remotes) peers.push_back(i.first);
+  vector<uint32_t> peers = get_map_keys(remotes);
   uniquify(peers);
 
   const auto rem_peer = [&peers](const uint32_t peer) {
@@ -653,8 +673,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   vector<uint32_t> ret;
 
   if(is_broadcast) {
-    ret.reserve(remotes.size() + 1);
-    for(const auto &i : remotes) ret.push_back(i.first);
+    ret = get_map_keys(remotes);
     ret.push_back(local_ip.s_addr);
     uniquify(ret);
   } else {
@@ -1088,6 +1107,7 @@ int main(int argc, char *argv[]) {
     // replace remotes (after cleanup -> lesser remotes to process)
     // we can't merge this loop and the following, because this loop iterates and only inserts
     // but the next loop erases elements
+    discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
     for(auto &i : tr_remotes) {
       remotes[std::move(i.second)] = std::move(remotes[i.first]);
       discard_remotes.push_back(i.first);
