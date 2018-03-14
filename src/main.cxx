@@ -382,8 +382,8 @@ class rem_peer_t final {
     const auto it = lower_bound(_vec.begin(), _vec.end(), item);
     if(it == _vec.end() || *it != item) return false;
     // erase element
-    iter_swap(it, _vec.end() - 1);
-    _vec.erase(_vec.end() - 1);
+    // NOTE: don't swap [back] with [*it], as that destructs sorted range
+    _vec.erase(it);
     return true;
   }
 };
@@ -393,6 +393,9 @@ template<typename T>
 auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T> {
   return {vec};
 }
+
+// compact definition for rem_peer_t
+#define GET_REM_PEER(C) const auto rem_peer = make_rem_peer(C)
 
 /** get_map_keys
  * generate a vector from the keys of an map
@@ -582,7 +585,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
 
 static void send_zprn_msg(const zprn &msg) {
   vector<uint32_t> peers = uniquify_move(get_map_keys(remotes));
-  auto rem_peer = make_rem_peer(peers);
+  GET_REM_PEER(peers);
 
   // filter local tun interface
   rem_peer(local_ip.s_addr);
@@ -686,22 +689,21 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   // get route to destination
   vector<uint32_t> ret;
 
+  // function to filter a peer
+  GET_REM_PEER(ret);
+
   if(is_broadcast) {
     ret = get_map_keys(remotes);
-    ret.push_back(local_ip.s_addr);
+    if(iam_ep) ret.push_back(local_ip.s_addr);
     uniquify(ret);
   } else {
     ret.emplace_back(routes[ip_dst.s_addr].get_router());
+    // catch bouncing packets in *local iface* network earlier
+    if(!iam_ep) rem_peer(local_ip.s_addr);
   }
-
-  // function to filter a peer
-  auto rem_peer = make_rem_peer(ret);
 
   // split horizon
   rem_peer(source_peer_ip);
-
-  // catch bouncing packets in *local iface* network earlier
-  if(!iam_ep) rem_peer(local_ip.s_addr);
 
   // fetch chksum before possible send_icmp_msg
   h_ip->ip_sum = fut_ip_sum.get();
@@ -1092,6 +1094,18 @@ int main(int argc, char *argv[]) {
     }
 
     auto fut_ufr = threadpool.enqueue([&found_remotes] { uniquify(found_remotes); });
+    mutex peermtx;
+    auto fut_trr = threadpool.enqueue([&] {
+      // replace remotes (after cleanup -> lesser remotes to process)
+      discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
+      for(auto &i : tr_remotes) {
+        lock_guard<mutex> pl(peermtx);
+        remotes[std::move(i.second)] = std::move(remotes[i.first]);
+        discard_remotes.push_back(i.first);
+      }
+      tr_remotes.clear();
+      uniquify(discard_remotes);
+    });
 
     // cleanup routes, needs to be done after del_router calls
     for(auto it = routes.begin(); it != routes.end();) {
@@ -1107,6 +1121,8 @@ int main(int argc, char *argv[]) {
         msg.zprn_cmd = ZPRN_ROUTEMOD;
         msg.zprn_un.route.dsta = it->first;
         msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
+        // this is the only part of this loop which uses remotes
+        lock_guard<mutex> pl(peermtx);
         send_zprn_msg(msg);
       }
 
@@ -1115,20 +1131,10 @@ int main(int argc, char *argv[]) {
       else ++it;
     }
 
-    // replace remotes (after cleanup -> lesser remotes to process)
-    // we can't merge this loop and the following, because this loop iterates and only inserts
-    // but the next loop erases elements
-    discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
-    for(auto &i : tr_remotes) {
-      remotes[std::move(i.second)] = std::move(remotes[i.first]);
-      discard_remotes.push_back(i.first);
-    }
-    tr_remotes.clear();
-
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
-    uniquify(discard_remotes);
+    fut_trr.wait();
     {
-      auto rem_peer = make_rem_peer(discard_remotes);
+      GET_REM_PEER(discard_remotes);
       for(auto it = remotes.cbegin(); it != remotes.cend();) {
         if(rem_peer(it->first))
           it = remotes.erase(it);
@@ -1140,7 +1146,7 @@ int main(int argc, char *argv[]) {
     fut_ufr.wait();
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
-      auto rem_peer = make_rem_peer(found_remotes);
+      GET_REM_PEER(found_remotes);
       for(const auto &r : zprd_conf.remotes) {
         if(rem_peer(i)) {
           struct in_addr remote;
