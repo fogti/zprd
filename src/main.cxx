@@ -101,7 +101,7 @@ struct send_data final {
 };
 
 class sender_t final {
-  queue<send_data> _tasks;
+  vector<send_data> _tasks;
 
   // sync
   mutex _mtx;
@@ -127,8 +127,8 @@ class sender_t final {
  **/
 static int local_fd, server_fd;
 
-// make sure that there are at least 1 normal worker thread + 1 send thread
-static ThreadPool threadpool(std::max(2u, thread::hardware_concurrency()) - 1);
+// make sure that there are at least 1 (at most 2) normal worker thread + 1 send thread
+static ThreadPool threadpool(std::min(2u, std::max(2u, thread::hardware_concurrency()) - 1));
 static sender_t sender;
 
 static unordered_map<uint32_t, remote_peer_t> remotes;
@@ -449,7 +449,7 @@ void sender_t::worker_fn() noexcept {
   set_df(false);
   set_tos(0);
 
-  queue<send_data> tasks;
+  vector<send_data> tasks;
   struct sockaddr_in dsta;
   memset(&dsta, 0, sizeof(dsta));
   dsta.sin_family = AF_INET;
@@ -460,35 +460,33 @@ void sender_t::worker_fn() noexcept {
       unique_lock<mutex> lock(_mtx);
       _cond.wait(lock, [this] { return _stop || !_tasks.empty(); });
       if(_tasks.empty()) return;
-      _tasks.swap(tasks);
+      tasks = move(_tasks);
+      _tasks = {};
     }
 
     // send data
-    while(!tasks.empty()) {
-      auto &dat = tasks.front();
+    for(auto &dat: tasks) {
       const auto buf = dat.buffer.data();
       const auto buflen = dat.buffer.size();
       if(make_rem_peer(dat.dests)(local_ip.s_addr))
         if(write(local_fd, buf, buflen) < 0)
           perror("write()");
 
-      if(!dat.dests.empty()) {
-        // setup outer Dont-Frag bit
-        {
-          const bool cdf = dat.frag & htons(IP_DF);
-          if(df != cdf) set_df(cdf);
-        }
+      if(dat.dests.empty()) continue;
 
-        // setup outer TOS
-        if(tos != dat.tos) set_tos(dat.tos);
-
-        for(const auto &i : dat.dests) {
-          dsta.sin_addr.s_addr = i;
-          if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
-            perror("sendto()");
-        }
+      { // setup outer Dont-Frag bit
+        const bool cdf = dat.frag & htons(IP_DF);
+        if(df != cdf) set_df(cdf);
       }
-      tasks.pop();
+
+      // setup outer TOS
+      if(tos != dat.tos) set_tos(dat.tos);
+
+      for(const auto &i : dat.dests) {
+        dsta.sin_addr.s_addr = i;
+        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
+          perror("sendto()");
+      }
     }
 
     // flush output
@@ -501,7 +499,7 @@ void sender_t::enqueue(send_data &&dat) {
   dat.dests.shrink_to_fit();
   {
     lock_guard<mutex> lock(_mtx);
-    _tasks.emplace(std::move(dat));
+    _tasks.emplace_back(std::move(dat));
   }
   _cond.notify_one();
 }
