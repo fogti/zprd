@@ -148,7 +148,7 @@ static bool init_all(const string &confpath) {
     return true;
   };
 
-#define runcmd(X) do { const auto rcf_ret = runcmd_fn(X); if(!rcf_ret) return false; } while(0)
+#define runcmd(X) do { const auto rcf_ret = runcmd_fn(X); if(!rcf_ret) return false; } while(false)
 
   // redirect stdin (don't block terminals)
   {
@@ -271,7 +271,7 @@ static bool init_all(const string &confpath) {
 
   chdir("/");
   // last_time must be set before any call to routing classes happen
-  srand((last_time = time(0)));
+  srand((last_time = time(nullptr)));
 
   // init tundev
   {
@@ -336,7 +336,7 @@ static route_via_t* have_route(const uint32_t dsta) noexcept {
   const auto it = routes.find(dsta);
   return (
     (it == routes.end() || it->second.empty())
-      ? 0 : &(it->second)
+      ? nullptr : &(it->second)
   );
 }
 
@@ -364,7 +364,7 @@ void uniquify(TCont &c) noexcept {
 template<class TCont>
 TCont uniquify_move(TCont &&c) noexcept {
   uniquify(c);
-  return move(c); // move c here because it's an rvalue ref
+  return forward<TCont>(c);
 }
 
 /** rem_peer_t
@@ -375,7 +375,7 @@ class rem_peer_t final {
   vector<T> &_vec;
 
  public:
-  rem_peer_t(vector<T> &vec) noexcept: _vec(vec) { }
+  explicit rem_peer_t(vector<T> &vec) noexcept: _vec(vec) { }
 
   bool operator()(const T &item) const noexcept {
     // perform a binary find
@@ -391,7 +391,7 @@ class rem_peer_t final {
 // automatic type deducing support for rem_peer_t
 template<typename T>
 auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T> {
-  return {vec};
+  return rem_peer_t<T>(vec);
 }
 
 // compact definition for rem_peer_t
@@ -455,7 +455,7 @@ void sender_t::worker_fn() noexcept {
   dsta.sin_family = AF_INET;
   dsta.sin_port   = htons(zprd_conf.data_port);
 
-  while(1) {
+  while(true) {
     {
       unique_lock<mutex> lock(_mtx);
       _cond.wait(lock, [this] { return _stop || !_tasks.empty(); });
@@ -1021,14 +1021,14 @@ int main(int argc, char *argv[]) {
       FD_SET(local_fd, &rd_set);
       FD_SET(server_fd, &rd_set);
 
-      if(select(std::max(local_fd, server_fd) + 1, &rd_set, 0, 0, 0) < 0) {
+      if(select(std::max(local_fd, server_fd) + 1, &rd_set, nullptr, nullptr, nullptr) < 0) {
         if(errno == EINTR) continue;
         perror("select()");
         retcode = 1;
         break;
       }
 
-      last_time = time(0);
+      last_time = time(nullptr);
 
       uint16_t nread;
       char buffer[BUFSIZE];
@@ -1096,9 +1096,9 @@ int main(int argc, char *argv[]) {
     auto fut_trr = threadpool.enqueue([&] {
       // replace remotes (after cleanup -> lesser remotes to process)
       discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
-      for(auto &i : tr_remotes) {
+      for(const auto &i : tr_remotes) {
         lock_guard<mutex> pl(peermtx);
-        remotes[std::move(i.second)] = std::move(remotes[i.first]);
+        remotes[i.second] = std::move(remotes[i.first]);
         discard_remotes.push_back(i.first);
       }
       tr_remotes.clear();

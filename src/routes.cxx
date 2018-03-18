@@ -5,11 +5,7 @@
  **/
 
 #include <algorithm>
-#include <utility>
 #include "routes.hpp"
-
-extern zprd_conf_t zprd_conf;
-extern time_t      last_time;
 
 using namespace std;
 
