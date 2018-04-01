@@ -684,21 +684,21 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
     is_broadcast = true;
   }
 
-  // get route to destination
   vector<uint32_t> ret;
-
-  // function to filter a peer
   GET_REM_PEER(ret);
 
+  // get route to destination
   if(is_broadcast) {
     ret = get_map_keys(remotes);
     if(iam_ep) ret.push_back(local_ip.s_addr);
     uniquify(ret);
   } else {
     ret.emplace_back(routes[ip_dst.s_addr].get_router());
-    // catch bouncing packets in *local iface* network earlier
-    if(!iam_ep) rem_peer(local_ip.s_addr);
   }
+
+  // catch bouncing packets in *local iface* network earlier
+  // NOTE: local_ip may be in remotes keys
+  if(!iam_ep) rem_peer(local_ip.s_addr);
 
   // split horizon
   rem_peer(source_peer_ip);
