@@ -18,7 +18,7 @@ fi
 
 RUN_AS_USER="$(grep '^U' "$ZPRD_CONF" | tail -1 | cut -c2-)"
 
-if [ -z "$(ip tuntap show dev "$IFACE")" ]; then
+if [ -z "$(ip tuntap show | grep "^$IFACE:")" ]; then
   echo "STARTUP: setup tun device $IFACE"
   XTTA=''
   [ -n "$RUN_AS_USER" ] && XTTA="user $RUN_AS_USER"

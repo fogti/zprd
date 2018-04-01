@@ -148,8 +148,6 @@ static bool init_all(const string &confpath) {
     return true;
   };
 
-#define runcmd(X) do { const auto rcf_ret = runcmd_fn(X); if(!rcf_ret) return false; } while(false)
-
   // redirect stdin (don't block terminals)
   {
     const int ofd = open("/dev/null", O_RDONLY);
@@ -164,6 +162,8 @@ static bool init_all(const string &confpath) {
     }
     close(ofd);
   }
+
+#define runcmd(X) do { const auto rcf_ret = runcmd_fn(X); if(!rcf_ret) return false; } while(false)
 
   // read config
   {
@@ -250,6 +250,21 @@ static bool init_all(const string &confpath) {
 
 # undef runcmd
 
+    // init tundev
+    {
+      char if_name[IFNAMSIZ];
+      strncpy(if_name, zprd_conf.iface.c_str(), IFNAMSIZ - 1);
+      if_name[IFNAMSIZ - 1] = 0;
+
+      if( (local_fd = tun_alloc(if_name, IFF_TUN | IFF_NO_PI)) < 0 ) {
+        fprintf(stderr, "failed to connect to interface '%s'\n", if_name);
+        return false;
+      }
+      zprd_conf.iface = if_name;
+
+      printf("connected to interface %s\n", if_name);
+    }
+
     if(!run_as_user.empty()) {
       printf("running daemon as user: '%s'\n", run_as_user.c_str());
 
@@ -272,21 +287,6 @@ static bool init_all(const string &confpath) {
   chdir("/");
   // last_time must be set before any call to routing classes happen
   srand((last_time = time(nullptr)));
-
-  // init tundev
-  {
-    char if_name[IFNAMSIZ];
-    strncpy(if_name, zprd_conf.iface.c_str(), IFNAMSIZ - 1);
-    if_name[IFNAMSIZ - 1] = 0;
-
-    if( (local_fd = tun_alloc(if_name, IFF_TUN | IFF_NO_PI)) < 0 ) {
-      fprintf(stderr, "failed to connect to interface '%s'\n", if_name);
-      return false;
-    }
-    zprd_conf.iface = if_name;
-
-    printf("connected to interface %s\n", if_name);
-  }
 
   {
     size_t i = 0;
