@@ -527,6 +527,8 @@ enum zprd_icmpe {
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   send_data dat(vector<char>{buflen, 0}, {source_ip});
+  // make sure we havew enough space (sometimes the wrong constructor is called)
+  if(dat.buffer.size() != buflen) dat.buffer.assign(buflen, 0);
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
