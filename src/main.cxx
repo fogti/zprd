@@ -526,9 +526,7 @@ enum zprd_icmpe {
 
 static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  send_data dat(vector<char>{buflen, 0}, {source_ip});
-  // make sure we havew enough space (sometimes the wrong constructor is called)
-  if(dat.buffer.size() != buflen) dat.buffer.assign(buflen, 0);
+  send_data dat{vector<char>(buflen, 0), {source_ip}};
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
@@ -1062,15 +1060,15 @@ int main(int argc, char *argv[]) {
     const auto curt = last_time;
 
     for(auto &i : remotes) {
-      if(i.second.cent != -1)
-        found_remotes.push_back(i.second.cent);
+      if(i.second.cent)
+        found_remotes.push_back(i.second.cent - 1);
 
       bool discard = true;
 
       // skip local, and remotes which aren't timed out
       if(i.first == local_ip.s_addr || (curt - zprd_conf.remote_timeout) < i.second.seen) {
         discard = false;
-      } else if(i.second.cent != -1) {
+      } else if(i.second.cent) {
         // try to update ip
         struct in_addr remote;
         if(resolve_hostname(i.second.cfgent_name(), remote)) {
