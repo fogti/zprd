@@ -1,7 +1,7 @@
 /**
  * zprd / routes.hpp
  * (C) 2017 - 2018 Erik Zscheile.
- * License: GPL-3
+ * License: GPL-2+
  **/
 #pragma once
 #include <inttypes.h>

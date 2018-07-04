@@ -1,7 +1,7 @@
 /**
  * ping_cache.cxx determinate latency and hop count using a ping cache
  * (C) 2018 Erik Zscheile.
- * License: GPL-3
+ * License: GPL-2+
  **/
 
 #include <time.h>

@@ -1,12 +1,13 @@
 /**
  * remote_peer.hpp
  * (C) 2018 Erik Zscheile.
- * License: GPL-3
+ * License: GPL-2+
  **/
 #pragma once
 #include <inttypes.h>
 #include <stddef.h>
 #include <time.h>
+
 struct remote_peer_t {
   time_t seen;
   size_t cent; // config entry

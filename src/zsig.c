@@ -1,8 +1,8 @@
 /**
  * zsig.c
- * (C) 2017 Erik Zscheile
  * (C) 2006 Rheinwerk Verlag GmbH
- * License: GPL-3
+ * (C) 2017 Erik Zscheile
+ * License: MIT and GPL-2+
  **/
 
 #include "crest.h"

@@ -1,18 +1,19 @@
 /**
  * cksum.cxx
  * (C) 2017 - 2018 Erik Zscheile
- * License: GPL-3
+ * License: GPL-2+
  **/
 
 #include "config.h"
+#include "crest.h"
 #ifdef TBB_FOUND
 # include <numeric>
 # include <functional>
 # include <tbb/parallel_reduce.h>
 # include <tbb/blocked_range.h>
 #endif
-#include "crest.h"
 
+[[gnu::hot]]
 uint16_t in_cksum(const uint16_t *ptr, int nbytes) noexcept {
   long sum = 0;
 

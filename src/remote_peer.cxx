@@ -1,7 +1,7 @@
 /**
  * remote_peer.cxx
  * (C) 2017 Erik Zscheile.
- * License: GPL-3
+ * License: GPL-2+
  **/
 
 #include "remote_peer.hpp"

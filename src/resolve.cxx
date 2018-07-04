@@ -1,7 +1,7 @@
 /**
  * resolve.cxx
  * (C) 2018 Erik Zscheile.
- * License: GPL-3
+ * License: GPL-2+
  **/
 
 #define __USE_MISC 1

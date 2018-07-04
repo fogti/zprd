@@ -1,9 +1,6 @@
 /**
  * config.h.in build time configuration for ZPRD
  * (C) 2018 Erik Zscheile
- * License: GPL-3
  */
-#ifndef ZPRD_CONFIG_PP_H
-#define ZPRD_CONFIG_PP_H 1
+#pragma once
 #cmakedefine TBB_FOUND
-#endif

@@ -1,5 +1,6 @@
 /**
  * crw.c controlled read/write functions
+ * original source: simpletun
  *
  * (C) 2010 Davide Brini.
  * (C) 2017 - 2018 Erik Zscheile.

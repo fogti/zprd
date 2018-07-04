@@ -1,7 +1,7 @@
 /**
  * zprd / routes.cxx - collection of via_route_t's
  * (C) 2017 - 2018 Erik Zscheile.
- * License: GPL-3
+ * License: GPL-2+
  **/
 
 #include <algorithm>
@@ -21,6 +21,7 @@ static auto tpl_find_router(sfl_vrt &c, const uint32_t router) noexcept -> sfl_v
   );
 }
 
+[[gnu::hot]]
 bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
   if(empty()) _fresh_add = true;
   const auto it = tpl_find_router(_routers, router);

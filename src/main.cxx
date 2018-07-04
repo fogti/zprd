@@ -7,7 +7,7 @@
  * (C) 2010 Davide Brini.
  * (C) 2017 - 2018 Erik Zscheile.
  *
- * License: GPL-3
+ * License: GPL-2+
  *
  * DISCLAIMER AND WARNING: this is all work in progress. The code is
  * ugly, the algorithms are naive, error checking and input validation
