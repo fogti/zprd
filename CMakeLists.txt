@@ -18,8 +18,7 @@ else()
 endif()
 
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
-include_directories($<$<COMPILE_LANGUAGE:CXX>:${PROJECT_SOURCE_DIR}/3rdparty/ThreadPool>
-    src include "${PROJECT_BINARY_DIR}")
+include_directories(src include "${PROJECT_BINARY_DIR}")
 
 if(${TBB_FOUND})
   include_directories(${TBB_INCLUDE_DIRS})

@@ -38,18 +38,17 @@
 #include "config.h"
 
 // C++
-#include <atomic>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
 #include <utility>
 
+#include <atomic>
+#include <future>
+
 #ifdef TBB_FOUND
 # include <tbb/parallel_sort.h>
 #endif
-
-// 3rdparty
-#include <ThreadPool.h>
 
 // own parts
 #include "addr.hpp"
@@ -67,8 +66,11 @@
 
 using namespace std;
 
+/*** global vars ***/
 zprd_conf_t zprd_conf;
 time_t last_time;
+
+/*** helper classes ***/
 
 struct send_data final {
   vector<char> buffer;
@@ -118,7 +120,7 @@ class sender_t final {
   void stop() noexcept;
 };
 
-/*** global vars ***/
+/*** file-scope global vars ***/
 
 /** file descriptors
  *
@@ -127,16 +129,16 @@ class sender_t final {
  **/
 static int local_fd, server_fd;
 
-// make sure that there are at least 1 (at most 2) normal worker thread + 1 send thread
-static ThreadPool threadpool(std::min(2u, std::max(2u, thread::hardware_concurrency()) - 1));
-static sender_t sender;
-
 static unordered_map<uint32_t, remote_peer_t> remotes;
 static unordered_map<uint32_t, route_via_t> routes;
+
+static sender_t     sender;
 static ping_cache_t ping_cache;
 
 static in_addr local_ip, local_netmask;
 static bool have_local_ip;
+
+/*** helper functions ***/
 
 static bool init_all(const string &confpath) {
   static const auto runcmd_fn = [](const string &cmd) -> bool {
@@ -413,7 +415,7 @@ auto get_map_keys(const Cont &c) -> vector<typename Cont::key_type> {
  **/
 template<class T>
 auto get_cksum_fut(const T *const ptr) -> future<uint16_t> {
-  return threadpool.enqueue([ptr]() noexcept { return IN_CKSUM(ptr); });
+  return std::async(std::launch::async, [ptr]() noexcept { return IN_CKSUM(ptr); });
 }
 
 void sender_t::worker_fn() noexcept {
@@ -1091,9 +1093,9 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    auto fut_ufr = threadpool.enqueue([&found_remotes] { uniquify(found_remotes); });
+    auto fut_ufr = async(launch::async, [&found_remotes] { uniquify(found_remotes); });
     mutex peermtx;
-    auto fut_trr = threadpool.enqueue([&] {
+    auto fut_trr = async(launch::async, [&] {
       // replace remotes (after cleanup -> lesser remotes to process)
       discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
       for(const auto &i : tr_remotes) {
