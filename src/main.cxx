@@ -353,7 +353,7 @@ static string get_remote_desc(const uint32_t addr) {
  * make all elems in a container unique
  **/
 template<class TCont>
-void uniquify(TCont &c) noexcept {
+static void uniquify(TCont &c) noexcept {
 #ifdef TBB_FOUND
   tbb::parallel_sort
 #else
@@ -364,7 +364,7 @@ void uniquify(TCont &c) noexcept {
 }
 
 template<class TCont>
-TCont uniquify_move(TCont &&c) noexcept {
+static TCont uniquify_move(TCont &&c) noexcept {
   uniquify(c);
   return forward<TCont>(c);
 }
@@ -399,25 +399,6 @@ auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T> {
 // compact definition for rem_peer_t
 #define GET_REM_PEER(C) const auto rem_peer = make_rem_peer(C)
 
-/** get_map_keys
- * generate a vector from the keys of an map
- **/
-template<class Cont>
-auto get_map_keys(const Cont &c) -> vector<typename Cont::key_type> {
-  vector<typename Cont::key_type> ret;
-  ret.reserve(c.size());
-  for(const auto &i : c) ret.push_back(i.first);
-  return ret;
-}
-
-/** get_cksum_fut
- * returns a future to an in_cksum{ptr...} result
- **/
-template<class T>
-auto get_cksum_fut(const T *const ptr) -> future<uint16_t> {
-  return std::async(std::launch::async, [ptr]() noexcept { return IN_CKSUM(ptr); });
-}
-
 void sender_t::worker_fn() noexcept {
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
 
@@ -425,18 +406,18 @@ void sender_t::worker_fn() noexcept {
   uint8_t tos = 0;
 
   const auto set_df = [&df](const bool cdf) noexcept {
-    const int tmp_df = cdf ?
+    const int tmp_df = cdf
 # if defined(IP_DONTFRAG)
-      1 : 0;
+      ;
     if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
 # elif defined(IP_MTU_DISCOVER)
-      IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
+      ? IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
     if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
 # else
 #  warning "set_ip_df: no method available to manage the dont-frag bit"
-      0 : 0;
+      ;
     if(0) {}
 # endif
     else df = cdf;
@@ -530,6 +511,17 @@ void sender_t::stop() noexcept {
   _cond.notify_all();
 }
 
+/** get_map_keys
+ * generate a vector from the keys of an map
+ **/
+template<class Cont>
+static auto get_map_keys(const Cont &c) {
+  vector<typename Cont::key_type> ret;
+  ret.reserve(c.size());
+  for(const auto &i : c) ret.emplace_back(i.first);
+  return ret;
+}
+
 enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
@@ -538,8 +530,6 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   send_data dat{vector<char>(buflen, 0), {source_ip}};
   char *const buffer = dat.buffer.data();
-
-  auto fut_ohip_sum = get_cksum_fut(orig_hip);
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   h_ip->ip_v   = 4;
@@ -574,11 +564,8 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
       return;
   }
 
-  // calculate icmp checksum
-  auto fut_icmp_sum = get_cksum_fut(h_icmp);
-
   // setup payload = orig ip header
-  orig_hip->ip_sum = fut_ohip_sum.get();
+  orig_hip->ip_sum = IN_CKSUM(orig_hip);
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
 
   // setup secondary payload = first 8 bytes of original payload
@@ -586,7 +573,8 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
          orig_hip + sizeof(ip),
          std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
 
-  h_icmp->checksum = fut_icmp_sum.get();
+  // calculate icmp checksum
+  h_icmp->checksum = IN_CKSUM(h_icmp);
   sender.enqueue(move(dat));
 }
 
@@ -1014,6 +1002,12 @@ int main(int argc, char *argv[]) {
   vector<size_t>   found_remotes;
   unordered_map<uint32_t, uint32_t> tr_remotes;
 
+  const auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
+    // discard route
+    const auto d = get_remote_desc(router);
+    printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr}), d.c_str());
+  };
+
   while(!b_do_shutdown) {
     /* last_time - global time, updated after select
        pastt - time before select
@@ -1054,15 +1048,11 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    const auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
-      // discard route
-      const auto d = get_remote_desc(router);
-      printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr}), d.c_str());
-    };
-
     // only cleanup things if at least 1 second passed since last iteration
     if(last_time == pastt) continue;
     const auto curt = last_time;
+
+    found_remotes.reserve(zprd_conf.remotes.size());
 
     for(auto &i : remotes) {
       if(i.second.cent)
@@ -1097,46 +1087,45 @@ int main(int argc, char *argv[]) {
     }
 
     auto fut_ufr = async(launch::async, [&found_remotes] { uniquify(found_remotes); });
-    mutex peermtx;
-    auto fut_trr = async(launch::async, [&] {
+    {
+      mutex peermtx;
       // replace remotes (after cleanup -> lesser remotes to process)
-      discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
-      for(const auto &i : tr_remotes) {
-        lock_guard<mutex> pl(peermtx);
-        remotes[i.second] = std::move(remotes[i.first]);
-        discard_remotes.push_back(i.first);
-      }
-      tr_remotes.clear();
-      uniquify(discard_remotes);
-    });
-
-    // cleanup routes, needs to be done after del_router calls
-    for(auto it = routes.begin(); it != routes.end();) {
-      auto &ise = it->second;
-      ise.cleanup([it, del_route_msg](const uint32_t router) {
-        del_route_msg(it->first, router);
+      auto fut_trr = async(launch::async, [&] {
+        discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
+        for(const auto &i : tr_remotes) {
+          lock_guard<mutex> pl(peermtx);
+          remotes[i.second] = std::move(remotes[i.first]);
+          discard_remotes.push_back(i.first);
+        }
+        tr_remotes.clear();
+        uniquify(discard_remotes);
       });
 
-      const bool iee = ise.empty();
-      if(iee || ise._fresh_add) {
-        ise._fresh_add = false;
+      // cleanup routes, needs to be done after del_router calls
+      for(auto it = routes.begin(); it != routes.end();) {
+        auto &ise = it->second;
+        ise.cleanup([it, del_route_msg](const uint32_t router) {
+          del_route_msg(it->first, router);
+        });
 
-        msg.zprn_cmd = ZPRN_ROUTEMOD;
-        msg.zprn_un.route.dsta = it->first;
-        msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
-        // this is the only part of this loop which uses remotes
-        lock_guard<mutex> pl(peermtx);
-        send_zprn_msg(msg);
+        const bool iee = ise.empty();
+        if(iee || ise._fresh_add) {
+          ise._fresh_add = false;
+
+          msg.zprn_cmd = ZPRN_ROUTEMOD;
+          msg.zprn_un.route.dsta = it->first;
+          msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
+          // this is the only part of this loop which uses remotes
+          lock_guard<mutex> pl(peermtx);
+          send_zprn_msg(msg);
+        }
+
+        // NOTE: don't use *it after erase (see Issue #1)
+        if(iee) it = routes.erase(it);
+        else ++it;
       }
-
-      // NOTE: don't use *it after erase (see Issue #1)
-      if(iee) it = routes.erase(it);
-      else ++it;
-    }
-
-    // discard remotes (after cleanup -> cleanup has a chance to notify them)
-    fut_trr.wait();
-    {
+    } {
+      // discard remotes (after cleanup -> cleanup has a chance to notify them)
       GET_REM_PEER(discard_remotes);
       for(auto it = remotes.cbegin(); it != remotes.cend();) {
         if(rem_peer(it->first))
