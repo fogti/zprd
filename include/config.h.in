@@ -4,3 +4,11 @@
  */
 #pragma once
 #cmakedefine TBB_FOUND
+#cmakedefine HAVE_BUILTIN_EXPECT
+#ifdef HAVE_BUILTIN_EXPECT
+# define zs_likely(x)   __builtin_expect(!!(x), 1)
+# define zs_unlikely(x) __builtin_expect(!!(x), 0)
+#else
+# define zs_likely(x)   (x)
+# define zs_unlikely(x) (x)
+#endif

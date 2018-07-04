@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include "routes.hpp"
+#include <config.h>
 
 using namespace std;
 
@@ -26,7 +27,7 @@ bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
   if(empty()) _fresh_add = true;
   const auto it = tpl_find_router(_routers, router);
   const bool ret = (it == _routers.end());
-  if(ret) {
+  if(zs_unlikely(ret)) {
     _routers.emplace_front(router, hops);
   } else {
     it->seen = last_time;
@@ -37,7 +38,7 @@ bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
 
 void route_via_t::update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
   const auto it = tpl_find_router(_routers, router);
-  if(it == _routers.end()) return;
+  if(zs_unlikely(it == _routers.end())) return;
   it->seen = last_time;
   it->hops = hops;
   it->latency = latency;

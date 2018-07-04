@@ -17,6 +17,10 @@ else()
   set(TBB_FOUND OFF)
 endif()
 
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles(
+  "int main(void) { return __builtin_expect(0, 1); }" HAVE_BUILTIN_EXPECT)
+
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
 include_directories(src include "${PROJECT_BINARY_DIR}")
 

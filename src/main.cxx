@@ -667,28 +667,26 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
+  vector<uint32_t> ret;
+  GET_REM_PEER(ret);
+
   // is a broadcast needed
   bool is_broadcast = false;
 
+  // get route to destination
   if(have_local_ip && ip_dst == local_ip) {
     if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
       printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
   } else if(!have_route(ip_dst.s_addr)) {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-    is_broadcast = true;
-  }
-
-  vector<uint32_t> ret;
-  GET_REM_PEER(ret);
-
-  // get route to destination
-  if(is_broadcast) {
     ret = get_map_keys(remotes);
     if(iam_ep) ret.push_back(local_ip.s_addr);
     uniquify(ret);
-  } else {
-    ret.emplace_back(routes[ip_dst.s_addr].get_router());
+    is_broadcast = true;
   }
+
+  if(!is_broadcast)
+    ret.emplace_back(routes[ip_dst.s_addr].get_router());
 
   // catch bouncing packets in *local iface* network earlier
   // NOTE: local_ip may be in remotes keys
@@ -796,16 +794,13 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
   if(h_ip->ip_v != 4) {
     printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", h_ip->ip_v, source_desc_c);
-    return false;
-  }
-
-  if(const uint16_t dsum = IN_CKSUM(h_ip)) {
+  } else if(const uint16_t dsum = IN_CKSUM(h_ip)) {
     printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
            h_ip->ip_sum, dsum, source_desc_c);
-    return false;
+  } else {
+    return true;
   }
-
-  return true;
+  return false;
 }
 
 // handlers for incoming ZPRN packets
@@ -897,15 +892,12 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
 
   if(nread < len) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u) from %s\n", nread, source_desc_c);
-    return false;
-  }
-
-  if(have_local_ip && h_ip->ip_src == local_ip) {
+  } else if(have_local_ip && h_ip->ip_src == local_ip) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
-    return false;
+  } else {
+    return true;
   }
-
-  return true;
+  return false;
 }
 
 static string format_time(const time_t x) {
@@ -1049,7 +1041,7 @@ int main(int argc, char *argv[]) {
     }
 
     // only cleanup things if at least 1 second passed since last iteration
-    if(last_time == pastt) continue;
+    if(zs_likely(last_time == pastt)) continue;
     const auto curt = last_time;
 
     found_remotes.reserve(zprd_conf.remotes.size());
