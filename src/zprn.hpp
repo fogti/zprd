@@ -1,7 +1,11 @@
-#ifndef ZPRN_HPP
-# define ZPRN_HPP 1
-# include <inttypes.h>
-# include <vector>
+/**
+ * zprn.hpp
+ * (C) 2018 Erik Zscheile.
+ * License: GPL-3
+ **/
+#pragma once
+#include <inttypes.h>
+#include <vector>
 
 struct zprn {
   uint8_t zprn_mgc;
@@ -30,4 +34,3 @@ struct zprn {
   zprn() noexcept;
   bool valid() const noexcept;
 };
-#endif

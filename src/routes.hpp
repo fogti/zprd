@@ -3,15 +3,13 @@
  * (C) 2017 - 2018 Erik Zscheile.
  * License: GPL-3
  **/
-#ifndef ROUTES_HPP
-# define ROUTES_HPP 1
-# include <inttypes.h>
-# include <forward_list>
-# include <tuple>
-# include "zprd_conf.hpp"
+#pragma once
+#include <inttypes.h>
+#include <forward_list>
+#include <tuple>
+#include "zprd_conf.hpp"
 
-extern zprd_conf_t zprd_conf;
-extern time_t      last_time;
+extern time_t last_time;
 
 struct via_router_t final {
   uint32_t addr;
@@ -78,5 +76,3 @@ struct route_via_t final {
     _routers.pop_front();
   }
 };
-
-#endif /* ROUTES_HPP */

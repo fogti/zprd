@@ -13,7 +13,7 @@ via_router_t::via_router_t(const uint32_t _addr, const uint8_t _hops) noexcept
   : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
 
 typedef std::forward_list<via_router_t> sfl_vrt;
-static auto tpl_find_router(sfl_vrt &c, const uint32_t router) -> sfl_vrt::iterator {
+static auto tpl_find_router(sfl_vrt &c, const uint32_t router) noexcept -> sfl_vrt::iterator {
   return find_if(c.begin(), c.end(),
     [router](const via_router_t &i) noexcept {
       return i.addr == router;

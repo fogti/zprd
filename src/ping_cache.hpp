@@ -1,6 +1,10 @@
-#ifndef PING_CACHE_HPP
-# define PING_CACHE_HPP 1
-# include <inttypes.h>
+/**
+ * ping_cache.hpp
+ * (C) 2018 Erik Zscheile.
+ * License: GPL-3
+ **/
+#pragma once
+#include <inttypes.h>
 
 class ping_cache_t final {
  public:
@@ -34,5 +38,3 @@ class ping_cache_t final {
   auto match(const data_t &dat, const uint32_t router, const uint8_t ttl)
        noexcept -> match_t;
 };
-
-#endif // PING_CACHE_HPP

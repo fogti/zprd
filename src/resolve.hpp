@@ -1,6 +1,11 @@
-#ifndef RESOLVE_HPP
-# define RESOLVE_HPP 1
-# include <netinet/in.h>
+/**
+ * resolve.hpp
+ * (C) 2018 Erik Zscheile.
+ * License: GPL-3
+ **/
+
+#pragma once
+#include <netinet/in.h>
 
 /** resolve_hostname:
  * resolves a hostname using (DNS) resolver and establishes a connection to it
@@ -10,5 +15,3 @@
  * @ret             DNS ok marker
  **/
 bool resolve_hostname(const char * const hostname, struct in_addr &remote) noexcept;
-
-#endif

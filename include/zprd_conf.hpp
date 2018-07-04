@@ -1,14 +1,13 @@
 /**
  * zprd_conf.hpp
- * (C) 2017 Erik Zscheile.
+ * (C) 2018 Erik Zscheile.
  * License: GPL-3
  **/
-#ifndef ZPRD_CONF_H
-# define ZPRD_CONF_H 1
-# include <inttypes.h>
-# include <time.h>
-# include <string>
-# include <vector>
+#pragma once
+#include <inttypes.h>
+#include <time.h>
+#include <string>
+#include <vector>
 
 struct zprd_conf_t {
   std::string iface;
@@ -22,5 +21,3 @@ struct zprd_conf_t {
 };
 
 extern zprd_conf_t zprd_conf;
-
-#endif
