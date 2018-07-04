@@ -5,8 +5,8 @@
  **/
 
 #define __USE_MISC 1
-#include <cstdio>
-#include <cstring> // memset
+#include <stdio.h>
+#include <string.h> // memset
 #include <netdb.h> // getaddrinfo
 #include "resolve.hpp"
 
@@ -14,12 +14,12 @@ bool resolve_hostname(const char * const hostname, struct in_addr &remote) noexc
   struct addrinfo hints, *servinfo;
 
   // setup hints
-  std::memset(&hints, 0, sizeof hints);
+  memset(&hints, 0, sizeof hints);
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_DGRAM;
 
   if(const int rv = getaddrinfo(hostname, nullptr, &hints, &servinfo)) {
-    std::printf("CLIENT ERROR: getaddrinfo: %s\n", gai_strerror(rv));
+    printf("CLIENT ERROR: getaddrinfo: %s\n", gai_strerror(rv));
     return false;
   }
 

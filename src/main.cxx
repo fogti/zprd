@@ -466,10 +466,18 @@ void sender_t::worker_fn() noexcept {
       _tasks = {};
     }
 
-    // send data
     for(auto &dat: tasks) {
-      const auto buf = dat.buffer.data();
+      auto buf = dat.buffer.data();
       const auto buflen = dat.buffer.size();
+
+      // update checksum if ipv4
+      {
+        const auto h_ip = reinterpret_cast<struct ip*>(buf);
+        if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
+          h_ip->ip_sum = IN_CKSUM(h_ip);
+      }
+
+      // send data
       if(make_rem_peer(dat.dests)(local_ip.s_addr))
         if(write(local_fd, buf, buflen) < 0)
           perror("write()");
@@ -526,10 +534,12 @@ enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
 
-static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip, const uint32_t source_ip) {
+static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const uint32_t source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   send_data dat{vector<char>(buflen, 0), {source_ip}};
   char *const buffer = dat.buffer.data();
+
+  auto fut_ohip_sum = get_cksum_fut(orig_hip);
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   h_ip->ip_v   = 4;
@@ -540,9 +550,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   h_ip->ip_p   = IPPROTO_ICMP;
   h_ip->ip_src = local_ip;
   h_ip->ip_dst = orig_hip->ip_src;
-
-  // calculate ip checksum
-  auto fut_ip_sum = get_cksum_fut(h_ip);
 
   const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
 
@@ -571,6 +578,7 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
   auto fut_icmp_sum = get_cksum_fut(h_icmp);
 
   // setup payload = orig ip header
+  orig_hip->ip_sum = fut_ohip_sum.get();
   memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
 
   // setup secondary payload = first 8 bytes of original payload
@@ -579,7 +587,6 @@ static void send_icmp_msg(const zprd_icmpe msg, const struct ip * const orig_hip
          std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
 
   h_icmp->checksum = fut_icmp_sum.get();
-  h_ip->ip_sum     = fut_ip_sum.get();
   sender.enqueue(move(dat));
 }
 
@@ -665,9 +672,6 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   // NOTE: make sure that no changes are done to buffer
   h_ip->ip_sum = 0;
 
-  // update checksum (because we changed the header)
-  auto fut_ip_sum = get_cksum_fut(h_ip);
-
   // update routes
   if(routes[ip_src.s_addr].add_router(
       source_peer_ip,
@@ -704,9 +708,6 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
 
   // split horizon
   rem_peer(source_peer_ip);
-
-  // fetch chksum before possible send_icmp_msg
-  h_ip->ip_sum = fut_ip_sum.get();
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
@@ -890,11 +891,13 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   const string source_desc = get_remote_desc(srca.s_addr);
   const char * const source_desc_c = source_desc.c_str();
 
-  if(sizeof(struct zprn) <= nread && reinterpret_cast<const zprn*>(buffer)->valid()) {
-    const auto d_zprn = *reinterpret_cast<const struct zprn*>(buffer);
-    const auto it = zprn_dpt.find(d_zprn.zprn_cmd);
-    if(it != zprn_dpt.end()) it->second(source_desc_c, srca.s_addr, d_zprn);
-    return false; // don't forward
+  {
+    const auto &d_zprn = *reinterpret_cast<const struct zprn*>(buffer);
+    if(sizeof(struct zprn) <= nread && d_zprn.valid()) {
+      const auto it = zprn_dpt.find(d_zprn.zprn_cmd);
+      if(it != zprn_dpt.end()) it->second(source_desc_c, srca.s_addr, d_zprn);
+      return false; // don't forward
+    }
   }
 
   if(!is_ipv4_packet(source_desc_c, buffer, nread)) return false;

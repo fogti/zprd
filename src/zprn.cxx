@@ -4,11 +4,11 @@
  * License: GPL-3
  **/
 
-#include <cstring>
+#include <string.h>
 #include "zprn.hpp"
 
 zprn::zprn() noexcept : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0) {
-  std::memset(&zprn_un, 0, sizeof(zprn_un));
+  memset(&zprn_un, 0, sizeof(zprn_un));
 }
 
 bool zprn::valid() const noexcept {
