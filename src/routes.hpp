@@ -6,6 +6,7 @@
 #pragma once
 #include <inttypes.h>
 #include <forward_list>
+#include <functional>
 #include <tuple>
 #include "zprd_conf.hpp"
 
@@ -21,32 +22,15 @@ struct via_router_t final {
 };
 
 // collection of via_route_t's
-struct route_via_t final {
+class route_via_t final {
+ public:
   std::forward_list<via_router_t> _routers;
   bool _fresh_add;
 
   route_via_t(): _fresh_add(false) { }
 
   // deletes all outdates routers and sort routers
-  template<typename Fn>
-  void cleanup(const Fn f) {
-    const auto ct = last_time - 2 * zprd_conf.remote_timeout;
-    _routers.remove_if(
-      [ct,f](const via_router_t &a) {
-        if(ct < a.seen) return false;
-        f(a.addr);
-        return true;
-      }
-    );
-
-    _routers.sort(
-      // place best router in front: low hops, low latency, recent seen
-      // priority high to low: hop count > latency > seen time
-      [](const via_router_t &a, const via_router_t &b) noexcept {
-        return std::tie(a.hops, a.latency, b.seen) < std::tie(b.hops, b.latency, a.seen);
-      }
-    );
-  }
+  void cleanup(const std::function<void (const uint32_t)> &f);
 
   bool empty() const noexcept {
     return _routers.empty();
@@ -75,4 +59,7 @@ struct route_via_t final {
   void del_primary_router() noexcept {
     _routers.pop_front();
   }
+
+ private:
+  auto find_router(const uint32_t router) noexcept -> decltype(_routers)::iterator;
 };

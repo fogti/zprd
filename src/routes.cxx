@@ -13,19 +13,38 @@ using namespace std;
 via_router_t::via_router_t(const uint32_t _addr, const uint8_t _hops) noexcept
   : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
 
-typedef std::forward_list<via_router_t> sfl_vrt;
-static auto tpl_find_router(sfl_vrt &c, const uint32_t router) noexcept -> sfl_vrt::iterator {
-  return find_if(c.begin(), c.end(),
+// deletes all outdates routers and sort routers
+void route_via_t::cleanup(const std::function<void (const uint32_t)> &f) {
+  const auto ct = last_time - 2 * zprd_conf.remote_timeout;
+  _routers.remove_if(
+    [ct,&f](const via_router_t &a) {
+      if(ct < a.seen) return false;
+      f(a.addr);
+      return true;
+    }
+  );
+
+  _routers.sort(
+    // place best router in front: low hops, low latency, recent seen
+    // priority high to low: hop count > latency > seen time
+    [](const via_router_t &a, const via_router_t &b) noexcept {
+      return std::tie(a.hops, a.latency, b.seen) < std::tie(b.hops, b.latency, a.seen);
+    }
+  );
+}
+
+[[gnu::hot]]
+auto route_via_t::find_router(const uint32_t router) noexcept -> decltype(_routers)::iterator {
+  return find_if(_routers.begin(), _routers.end(),
     [router](const via_router_t &i) noexcept {
       return i.addr == router;
     }
   );
 }
 
-[[gnu::hot]]
 bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
   if(empty()) _fresh_add = true;
-  const auto it = tpl_find_router(_routers, router);
+  const auto it = find_router(router);
   const bool ret = (it == _routers.end());
   if(zs_unlikely(ret)) {
     _routers.emplace_front(router, hops);
@@ -37,7 +56,7 @@ bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
 }
 
 void route_via_t::update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
-  const auto it = tpl_find_router(_routers, router);
+  const auto it = find_router(router);
   if(zs_unlikely(it == _routers.end())) return;
   it->seen = last_time;
   it->hops = hops;

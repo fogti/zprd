@@ -459,9 +459,8 @@ void sender_t::worker_fn() noexcept {
       }
 
       // send data
-      if(make_rem_peer(dat.dests)(local_ip.s_addr))
-        if(write(local_fd, buf, buflen) < 0)
-          perror("write()");
+      if(make_rem_peer(dat.dests)(local_ip.s_addr) && write(local_fd, buf, buflen) < 0)
+        perror("write()");
 
       if(dat.dests.empty()) continue;
 
@@ -480,8 +479,6 @@ void sender_t::worker_fn() noexcept {
       }
     }
 
-    // flush output
-    fflush(stdout);
     fflush(stderr);
   }
 }
@@ -608,6 +605,7 @@ static void send_zprn_msg(const zprn &msg) {
  * @do              send packets to the destination sockets
  * @ret             none
  **/
+[[gnu::hot]]
 static void route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
   remotes[source_peer_ip].seen = last_time;
 
@@ -683,11 +681,13 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
     if(iam_ep) ret.push_back(local_ip.s_addr);
     uniquify(ret);
     is_broadcast = true;
+    goto cont_broadcast;
   }
 
-  if(!is_broadcast)
-    ret.emplace_back(routes[ip_dst.s_addr].get_router());
+  // if(!is_broadcast)
+  ret.emplace_back(routes[ip_dst.s_addr].get_router());
 
+ cont_broadcast:
   // catch bouncing packets in *local iface* network earlier
   // NOTE: local_ip may be in remotes keys
   if(!iam_ep) rem_peer(local_ip.s_addr);
@@ -745,7 +745,10 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
               printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
             }
             // if there is a routing table entry left -> discard
-            if(!r->empty()) ret.clear();
+            if(!r->empty()) {
+              ret.clear();
+              return;
+            }
           }
         }
       } else if(!is_broadcast) {
@@ -773,8 +776,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
       }
     }
 
-    if(!ret.empty())
-      sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
+    sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
   }
 }
 
@@ -878,7 +880,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
     const auto &d_zprn = *reinterpret_cast<const struct zprn*>(buffer);
     if(sizeof(struct zprn) <= nread && d_zprn.valid()) {
       const auto it = zprn_dpt.find(d_zprn.zprn_cmd);
-      if(it != zprn_dpt.end()) it->second(source_desc_c, srca.s_addr, d_zprn);
+      if(zs_likely(it != zprn_dpt.end())) it->second(source_desc_c, srca.s_addr, d_zprn);
       return false; // don't forward
     }
   }
@@ -1059,13 +1061,13 @@ int main(int argc, char *argv[]) {
         // try to update ip
         struct in_addr remote;
         if(resolve_hostname(i.second.cfgent_name(), remote)) {
+          discard = false;
           i.second.seen = curt;
           if(remote.s_addr != i.first) {
             tr_remotes[i.first] = remote.s_addr;
             for(auto &r: routes)
               r.second.replace_router(i.first, remote.s_addr);
           }
-          discard = false;
         }
       }
 
@@ -1084,10 +1086,10 @@ int main(int argc, char *argv[]) {
       // replace remotes (after cleanup -> lesser remotes to process)
       auto fut_trr = async(launch::async, [&] {
         discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
-        for(const auto &i : tr_remotes) {
+        for(auto &i : tr_remotes) {
           lock_guard<mutex> pl(peermtx);
           remotes[i.second] = std::move(remotes[i.first]);
-          discard_remotes.push_back(i.first);
+          discard_remotes.emplace_back(std::move(i.first));
         }
         tr_remotes.clear();
         uniquify(discard_remotes);
@@ -1096,7 +1098,7 @@ int main(int argc, char *argv[]) {
       // cleanup routes, needs to be done after del_router calls
       for(auto it = routes.begin(); it != routes.end();) {
         auto &ise = it->second;
-        ise.cleanup([it, del_route_msg](const uint32_t router) {
+        ise.cleanup([=](const uint32_t router) {
           del_route_msg(it->first, router);
         });
 
