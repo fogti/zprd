@@ -15,17 +15,17 @@
 
 [[gnu::hot]]
 uint16_t in_cksum(const uint16_t *ptr, int nbytes) noexcept {
-  long sum = 0;
+  uint32_t sum = 0;
 
 #ifdef TBB_FOUND
   if(nbytes > 1) {
     typedef tbb::blocked_range<const uint16_t*> tbr_t;
     const auto eob = ptr + (nbytes / 2);
     sum = tbb::parallel_reduce(
-      tbr_t(ptr, eob), 0,
-      [](const tbr_t &r, const long x) noexcept {
+      tbr_t(ptr, eob), 0u,
+      [](const tbr_t &r, const decltype(sum) x) noexcept {
         return std::accumulate(r.begin(), r.end(), x);
-      }, std::plus<long>()
+      }, std::plus<decltype(sum)>()
     );
     ptr = eob;
   }

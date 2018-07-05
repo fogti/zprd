@@ -29,6 +29,8 @@ if(${TBB_FOUND})
   add_definitions(${TBB_DEFINITIONS})
 endif()
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -fno-exceptions -fno-unwind-tables")
+
 add_executable(zprd src/main.cxx src/cksum.cxx src/crw.c src/ping_cache.cxx
                     src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx src/zsig.c)
 target_link_libraries(zprd Threads::Threads)
@@ -41,12 +43,10 @@ function(src_compile_flags flag)
   set_property(SOURCE ${ARGN} APPEND_STRING PROPERTY COMPILE_FLAGS " ${flag}")
 endfunction()
 
-# use -fno-rtti on all C++ sources except the ones which use TBB
-src_compile_flags("-fno-rtti"
-  src/ping_cache.cxx src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx)
+# use -fno-rtti on all C++ sources except the ones which use tbb::parallel_sort
+src_compile_flags("-frtti" src/main.cxx)
 
 # disable exceptions for files, which only contain 'noexcept' functions
-src_compile_flags("-fno-exceptions -fno-unwind-tables"
-  src/cksum.cxx src/ping_cache.cxx src/remote_peer.cxx src/resolve.cxx src/zprn.cxx)
+src_compile_flags("-fexceptions -funwind-tables" src/main.cxx src/routes.cxx)
 
 install(TARGETS zprd DESTINATION "${INSTALL_BIN_DIR}")
