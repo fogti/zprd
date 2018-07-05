@@ -1010,11 +1010,10 @@ int main(int argc, char *argv[]) {
 
   while(!b_do_shutdown) {
     /* last_time - global time, updated after select
-       pastt - time before select
-       curt  - time after select
+       pastt     - time before select
       */
-    const auto pastt = last_time;
     { // use select() to handle two descriptors at once
+      const auto pastt = last_time;
       fd_set rd_set;
       FD_ZERO(&rd_set);
       FD_SET(local_fd, &rd_set);
@@ -1046,11 +1045,10 @@ int main(int argc, char *argv[]) {
         if(read_packet(addr, buffer, nread))
           route_packet(addr.s_addr, buffer, nread);
       }
-    }
 
-    // only cleanup things if at least 1 second passed since last iteration
-    if(zs_likely(last_time == pastt)) continue;
-    const auto curt = last_time;
+      // only cleanup things if at least 1 second passed since last iteration
+      if(last_time == pastt) continue;
+    }
 
     found_remotes.reserve(zprd_conf.remotes.size());
 
@@ -1058,32 +1056,29 @@ int main(int argc, char *argv[]) {
       if(i.second.cent)
         found_remotes.push_back(i.second.cent - 1);
 
-      bool discard = true;
-
       // skip local, and remotes which aren't timed out
-      if(i.first == local_ip.s_addr || (curt - zprd_conf.remote_timeout) < i.second.seen) {
-        discard = false;
-      } else if(i.second.cent) {
+      if(i.first == local_ip.s_addr || (last_time - zprd_conf.remote_timeout) < i.second.seen)
+        continue;
+
+      if(i.second.cent) {
         // try to update ip
         struct in_addr remote;
         if(resolve_hostname(i.second.cfgent_name(), remote)) {
-          discard = false;
-          i.second.seen = curt;
+          i.second.seen = last_time;
           if(remote.s_addr != i.first) {
             tr_remotes[i.first] = remote.s_addr;
             for(auto &r: routes)
               r.second.replace_router(i.first, remote.s_addr);
           }
+          continue;
         }
       }
 
-      if(discard) {
-        for(auto &r: routes)
-          if(r.second.del_router(i.first))
-            del_route_msg(r.first, i.first);
+      for(auto &r: routes)
+        if(r.second.del_router(i.first))
+          del_route_msg(r.first, i.first);
 
-        discard_remotes.emplace_back(i.first);
-      }
+      discard_remotes.emplace_back(i.first);
     }
 
     auto fut_ufr = async(launch::async, [&found_remotes]
@@ -1093,13 +1088,21 @@ int main(int argc, char *argv[]) {
       mutex peermtx;
       // replace remotes (after cleanup -> lesser remotes to process)
       auto fut_trr = async(launch::async, [&] {
+# ifndef HAVE_MAP_EXTRACT
         discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
+# endif
         {
           lock_guard<mutex> pl(peermtx);
           remotes.reserve(remotes.size() + tr_remotes.size());
           for(auto &i : tr_remotes) {
+# ifdef HAVE_MAP_EXTRACT
+            auto nh = remotes.extract(i.first);
+            nh.key() = i.second;
+            remotes.insert(std::move(nh));
+# else
             remotes[i.second] = std::move(remotes[i.first]);
-            discard_remotes.emplace_back(std::move(i.first));
+            discard_remotes.emplace_back(i.first);
+# endif
           }
         }
         tr_remotes.clear();

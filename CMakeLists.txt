@@ -4,7 +4,7 @@ project(zprd)
 set(INSTALL_BIN_DIR bin CACHE PATH "Installation directory for binaries")
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(USE_TBB "use the Intel Threading Building Blocks library" ON)
 
@@ -20,6 +20,10 @@ endif()
 include(CheckCXXSourceCompiles)
 check_cxx_source_compiles(
   "int main(void) { return __builtin_expect(0, 1); }" HAVE_BUILTIN_EXPECT)
+
+check_cxx_source_compiles(
+  "#include <map>\n#include <utility>\nint main(void) { std::map<int, int> m{{1,5}, {2,10} }; auto nh = m.extract(2); nh.key() = 4; m.insert(std::move(nh)); return 0; }"
+  HAVE_MAP_EXTRACT)
 
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
 include_directories(src include "${PROJECT_BINARY_DIR}")
