@@ -292,8 +292,8 @@ static bool init_all(const string &confpath) {
 
   {
     size_t i = 0;
+    struct in_addr remote;
     for(const auto &r : zprd_conf.remotes) {
-      struct in_addr remote;
       if(resolve_hostname(r.c_str(), remote)) {
         remotes[remote.s_addr] = {i};
         printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
@@ -349,24 +349,31 @@ static string get_remote_desc(const uint32_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
-/** uniquify:
- * make all elems in a container unique
+/** sortify:
+ * sorts all elems in a container
  **/
 template<class TCont>
-static void uniquify(TCont &c) noexcept {
+static void sortify(TCont &c) noexcept {
 #ifdef TBB_FOUND
   tbb::parallel_sort
 #else
   std::sort
 #endif
     (c.begin(), c.end());
-  c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
 template<class TCont>
-static TCont uniquify_move(TCont &&c) noexcept {
-  uniquify(c);
+static TCont sortify_move(TCont &&c) noexcept {
+  sortify(c);
   return forward<TCont>(c);
+}
+
+/** uniquify:
+ * make all elems in a container unique
+ **/
+template<class TCont>
+static void uniquify(TCont &c) noexcept {
+  c.erase(std::unique(c.begin(), c.end()), c.end());
 }
 
 /** rem_peer_t
@@ -390,13 +397,11 @@ class rem_peer_t final {
   }
 };
 
-// automatic type deducing support for rem_peer_t
+/** helpers for rem_peer_t **/
 template<typename T>
 auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T> {
   return rem_peer_t<T>(vec);
 }
-
-// compact definition for rem_peer_t
 #define GET_REM_PEER(C) const auto rem_peer = make_rem_peer(C)
 
 void sender_t::worker_fn() noexcept {
@@ -576,7 +581,7 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<uint32_t> peers = uniquify_move(get_map_keys(remotes));
+  vector<uint32_t> peers = sortify_move(get_map_keys(remotes));
   GET_REM_PEER(peers);
 
   // filter local tun interface
@@ -679,7 +684,8 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
     ret = get_map_keys(remotes);
     if(iam_ep) ret.push_back(local_ip.s_addr);
-    uniquify(ret);
+    sortify(ret);
+    if(iam_ep) uniquify(ret);
     is_broadcast = true;
     goto cont_broadcast;
   }
@@ -1076,23 +1082,28 @@ int main(int argc, char *argv[]) {
           if(r.second.del_router(i.first))
             del_route_msg(r.first, i.first);
 
-        discard_remotes.push_back(i.first);
+        discard_remotes.emplace_back(i.first);
       }
     }
 
-    auto fut_ufr = async(launch::async, [&found_remotes] { uniquify(found_remotes); });
+    auto fut_ufr = async(launch::async, [&found_remotes]
+      { sortify(found_remotes); uniquify(found_remotes); });
+
     {
       mutex peermtx;
       // replace remotes (after cleanup -> lesser remotes to process)
       auto fut_trr = async(launch::async, [&] {
         discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
-        for(auto &i : tr_remotes) {
+        {
           lock_guard<mutex> pl(peermtx);
-          remotes[i.second] = std::move(remotes[i.first]);
-          discard_remotes.emplace_back(std::move(i.first));
+          remotes.reserve(remotes.size() + tr_remotes.size());
+          for(auto &i : tr_remotes) {
+            remotes[i.second] = std::move(remotes[i.first]);
+            discard_remotes.emplace_back(std::move(i.first));
+          }
         }
         tr_remotes.clear();
-        uniquify(discard_remotes);
+        sortify(discard_remotes);
       });
 
       // cleanup routes, needs to be done after del_router calls
