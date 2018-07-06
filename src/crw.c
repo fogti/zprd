@@ -66,7 +66,7 @@ int cread(const int fd, char *buf, const size_t n) {
 
 // additional functions needed for work with UDP
 
-int recv_n(const int fd, char *buf, const size_t n, struct sockaddr_in *addr) {
+int recv_n(const int fd, char * __restrict__ buf, const size_t n, struct sockaddr_in * __restrict__ addr) {
   while(1) {
     socklen_t addrlen = sizeof(*addr);
     const int cnt = recvfrom(fd, buf, n, 0, (struct sockaddr *) addr, &addrlen);
