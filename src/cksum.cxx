@@ -1,7 +1,12 @@
 /**
  * cksum.cxx
  * (C) 2017 - 2018 Erik Zscheile
- * License: MIT
+ * License: dual licensed under MIT and BSD-3-clause
+
+ * NOTE: this file contains code derived from FreeBSD's ping.c
+
+ * Copyright (c) 1989, 1993
+ *      The Regents of the University of California.  All rights reserved.
  **/
 
 #include "config.h"
