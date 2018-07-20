@@ -1,7 +1,7 @@
 /**
  * cksum.cxx
  * (C) 2017 - 2018 Erik Zscheile
- * License: GPL-2+
+ * License: MIT
  **/
 
 #include "config.h"

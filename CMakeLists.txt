@@ -18,8 +18,9 @@ else()
   set(TBB_FOUND OFF)
 endif()
 
+include(CheckCSourceCompiles)
 include(CheckCXXSourceCompiles)
-check_cxx_source_compiles(
+check_c_source_compiles(
   "int main(void) { return __builtin_expect(0, 1); }" HAVE_BUILTIN_EXPECT)
 
 check_cxx_source_compiles(
