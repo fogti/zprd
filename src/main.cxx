@@ -910,7 +910,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   len = ntohs(h_ip->ip_len);
 
   if(zs_unlikely(nread < len)) {
-    printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u) from %s\n", nread, source_desc_c);
+    printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
   } else if(have_local_ip && h_ip->ip_src == local_ip) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
   } else {
