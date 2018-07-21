@@ -356,12 +356,10 @@ class rem_peer_t final {
   }
 };
 
-/** helpers for rem_peer_t **/
+/** helper for rem_peer_t **/
 template<typename T>
-auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T> {
-  return rem_peer_t<T>(vec);
-}
-#define GET_REM_PEER(C) const auto rem_peer = make_rem_peer(C)
+auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T>
+  { return rem_peer_t<T>(vec); }
 
 void sender_t::worker_fn() noexcept {
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
@@ -573,15 +571,11 @@ static auto get_map_keys(const Cont &c) {
 
 static void send_zprn_msg(const zprn &msg) {
   vector<zs_addr_t> peers = get_map_keys(remotes);
-  GET_REM_PEER(peers);
-
-  // filter local tun interface
-  rem_peer(local_ip.s_addr);
 
   // split horizon
   if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
     if(const auto r = have_route(msg.zprn_un.route.dsta))
-      rem_peer(r->get_router());
+      make_rem_peer(peers)(r->get_router());
 
   const auto msgptr = reinterpret_cast<const char *>(&msg);
   sender.enqueue({{msgptr, msgptr + sizeof(msg)}, move(peers)});
@@ -603,7 +597,8 @@ static void send_zprn_msg(const zprn &msg) {
  **/
 [[gnu::hot]]
 static void route_packet(const zs_addr_t source_peer_ip, char buffer[], const uint16_t buflen) {
-  remotes[source_peer_ip].seen = last_time;
+  if(!have_local_ip || source_peer_ip != local_ip.s_addr)
+    remotes[source_peer_ip].seen = last_time;
 
   const string source_desc = get_remote_desc(source_peer_ip);
   const auto source_desc_c = source_desc.c_str();
@@ -679,32 +674,28 @@ static void route_packet(const zs_addr_t source_peer_ip, char buffer[], const ui
   // update routes
   if(routes[ip_src.s_addr].add_router(
       source_peer_ip,
-      (have_local_ip && local_ip.s_addr == ip_src.s_addr) ? 0 : (MAXTTL - h_ip->ip_ttl)
+      (have_local_ip && local_ip == ip_src) ? 0 : (MAXTTL - h_ip->ip_ttl)
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   vector<zs_addr_t> ret;
-  GET_REM_PEER(ret);
 
   // is a broadcast needed
   bool is_broadcast = false;
 
   // get route to destination
-  if(have_local_ip && ip_dst == local_ip) {
+  if(iam_ep && ip_dst == local_ip) {
     ret.emplace_back(local_ip.s_addr);
   } else if(const auto r = have_route(ip_dst.s_addr)) {
     ret.emplace_back(r->get_router());
   } else {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
     ret = get_map_keys(remotes);
-    // catch bouncing packets in *local iface* network earlier
-    // NOTE: local_ip may be in remotes keys
-    rem_peer(local_ip.s_addr);
     is_broadcast = true;
   }
 
   // split horizon
-  rem_peer(source_peer_ip);
+  make_rem_peer(ret)(source_peer_ip);
 
   // assert(!iam_ep && !rem_peer(local_ip.s_addr));
 
@@ -1046,8 +1037,8 @@ int main(int argc, char *argv[]) {
       if(pdat.cent)
         found_remotes[pdat.cent - 1] = true;
 
-      // skip local, and remotes which aren't timed out
-      if(i.first == local_ip.s_addr || (last_time - zprd_conf.remote_timeout) < pdat.seen)
+      // skip remotes which aren't timed out
+      if(zs_likely((last_time - zprd_conf.remote_timeout) < pdat.seen))
         continue;
 
       if(pdat.cent) {
