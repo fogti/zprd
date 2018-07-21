@@ -541,6 +541,7 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
+  char * bufnxt = buffer + sizeof(struct ip);
   h_ip->ip_v   = 4;
   h_ip->ip_hl  = 5;
   h_ip->ip_len = htons(static_cast<uint16_t>(buflen));
@@ -550,7 +551,8 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
   h_ip->ip_src = local_ip;
   h_ip->ip_dst = orig_hip->ip_src;
 
-  const auto h_icmp = reinterpret_cast<struct icmphdr*>(buffer + sizeof(struct ip));
+  const auto h_icmp = reinterpret_cast<struct icmphdr*>(bufnxt);
+  bufnxt += sizeof(struct icmphdr);
 
   switch(msg) {
     case ZICMPM_TTL:
@@ -575,12 +577,12 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
 
   // setup payload = orig ip header
   orig_hip->ip_sum = IN_CKSUM(orig_hip);
-  memcpy(buffer + sizeof(struct ip) + sizeof(struct icmphdr), orig_hip, sizeof(struct ip));
+  memcpy(bufnxt, orig_hip, sizeof(struct ip));
+  bufnxt += sizeof(struct ip);
 
   // setup secondary payload = first 8 bytes of original payload
-  memcpy(buffer + 2 * sizeof(struct ip) + sizeof(struct icmphdr),
-         orig_hip + sizeof(ip),
-         std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
+  memcpy(bufnxt, orig_hip + sizeof(ip),
+         std::max(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
 
   // calculate icmp checksum
   h_icmp->checksum = IN_CKSUM(h_icmp);
