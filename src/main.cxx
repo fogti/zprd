@@ -350,33 +350,6 @@ static string get_remote_desc(const zs_addr_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
-/** sortify:
- * sorts all elems in a container
- **/
-template<class TCont>
-static void sortify(TCont &c) noexcept {
-#ifdef TBB_FOUND
-  tbb::parallel_sort
-#else
-  std::sort
-#endif
-    (c.begin(), c.end());
-}
-
-template<class TCont>
-static TCont sortify_move(TCont &&c) noexcept {
-  sortify(c);
-  return forward<TCont>(c);
-}
-
-/** uniquify:
- * make all elems in a container unique
- **/
-template<class TCont>
-static void uniquify(TCont &c) noexcept {
-  c.erase(std::unique(c.begin(), c.end()), c.end());
-}
-
 /** rem_peer_t
  * a functor which erases a vector item from a sorted vector
  **/
@@ -521,13 +494,22 @@ void sender_t::stop() noexcept {
 }
 
 /** get_map_keys
- * generate a vector from the keys of an map
+ * generate a sorted vector from the keys of an map
  **/
 template<class Cont>
 static auto get_map_keys(const Cont &c) {
   vector<typename Cont::key_type> ret;
   ret.reserve(c.size());
   for(const auto &i : c) ret.emplace_back(i.first);
+
+  /* sort all elems in 'ret' */
+#ifdef TBB_FOUND
+  tbb::parallel_sort
+#else
+  std::sort
+#endif
+    (ret.begin(), ret.end());
+
   return ret;
 }
 
@@ -590,7 +572,7 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<zs_addr_t> peers = sortify_move(get_map_keys(remotes));
+  vector<zs_addr_t> peers = get_map_keys(remotes);
   GET_REM_PEER(peers);
 
   // filter local tun interface
@@ -714,7 +696,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char buffer[], const ui
     ret.emplace_back(r->get_router());
   } else {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-    ret = sortify_move(get_map_keys(remotes));
+    ret = get_map_keys(remotes);
     // catch bouncing packets in *local iface* network earlier
     // NOTE: local_ip may be in remotes keys
     rem_peer(local_ip.s_addr);
