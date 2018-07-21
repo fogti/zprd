@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <vector>
 
+#pragma pack(push, 1)
 struct zprn {
   uint8_t zprn_mgc;
   uint8_t zprn_ver;
@@ -34,3 +35,4 @@ struct zprn {
   zprn() noexcept;
   bool valid() const noexcept;
 };
+#pragma pack(pop)
