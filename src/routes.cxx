@@ -10,11 +10,11 @@
 
 using namespace std;
 
-via_router_t::via_router_t(const uint32_t _addr, const uint8_t _hops) noexcept
+via_router_t::via_router_t(const zs_addr_t _addr, const uint8_t _hops) noexcept
   : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
 
 // deletes all outdates routers and sort routers
-void route_via_t::cleanup(const std::function<void (const uint32_t)> &f) {
+void route_via_t::cleanup(const std::function<void (const zs_addr_t)> &f) {
   const auto ct = last_time - 2 * zprd_conf.remote_timeout;
   _routers.remove_if(
     [ct,&f](const via_router_t &a) {
@@ -34,14 +34,14 @@ void route_via_t::cleanup(const std::function<void (const uint32_t)> &f) {
 }
 
 [[gnu::hot]]
-auto route_via_t::find_router(const uint32_t router) noexcept -> decltype(_routers)::iterator {
+auto route_via_t::find_router(const zs_addr_t router) noexcept -> decltype(_routers)::iterator {
   return find_if(_routers.begin(), _routers.end(),
     [router](const via_router_t &i) noexcept
       { return i.addr == router; }
   );
 }
 
-bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
+bool route_via_t::add_router(const zs_addr_t router, const uint8_t hops) {
   if(empty()) _fresh_add = true;
   const auto it = find_router(router);
   const bool ret = (it == _routers.end());
@@ -54,7 +54,7 @@ bool route_via_t::add_router(const uint32_t router, const uint8_t hops) {
   return ret;
 }
 
-void route_via_t::update_router(const uint32_t router, const uint8_t hops, const double latency) noexcept {
+void route_via_t::update_router(const zs_addr_t router, const uint8_t hops, const double latency) noexcept {
   const auto it = find_router(router);
   if(zs_unlikely(it == _routers.end())) return;
   it->seen = last_time;
@@ -69,7 +69,7 @@ void route_via_t::update_router(const uint32_t router, const uint8_t hops, const
  *
  * @param rold, rnew    old and new router addr
  **/
-void route_via_t::replace_router(const uint32_t rold, const uint32_t rnew) noexcept {
+void route_via_t::replace_router(const zs_addr_t rold, const zs_addr_t rnew) noexcept {
   const auto it_e = _routers.end();
   auto it_ob = it_e; // (iterator to old router) - 1
   bool nf = true;    // new router not found?
@@ -98,7 +98,7 @@ void route_via_t::replace_router(const uint32_t rold, const uint32_t rnew) noexc
   }
 }
 
-bool route_via_t::del_router(const uint32_t router) noexcept {
+bool route_via_t::del_router(const zs_addr_t router) noexcept {
   bool ret = false;
   _routers.remove_if(
     [router, &ret](const via_router_t &a) noexcept -> bool {
