@@ -452,6 +452,8 @@ void sender_t::worker_fn() noexcept {
       _tasks = {};
     }
 
+    bool got_error = false;
+
     for(auto &dat: tasks) {
       auto buf = dat.buffer.data();
       const auto buflen = dat.buffer.size();
@@ -464,8 +466,10 @@ void sender_t::worker_fn() noexcept {
       }
 
       // send data
-      if(make_rem_peer(dat.dests)(local_ip.s_addr) && write(local_fd, buf, buflen) < 0)
+      if(make_rem_peer(dat.dests)(local_ip.s_addr) && write(local_fd, buf, buflen) < 0) {
+        got_error = true;
         perror("write()");
+      }
 
       if(dat.dests.empty()) continue;
 
@@ -479,12 +483,14 @@ void sender_t::worker_fn() noexcept {
 
       for(const auto &i : dat.dests) {
         dsta.sin_addr.s_addr = i;
-        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0)
+        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0) {
+          got_error = true;
           perror("sendto()");
+        }
       }
     }
 
-    fflush(stderr);
+    if(got_error) fflush(stderr);
   }
 }
 
@@ -625,11 +631,18 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
     return;
   }
 
-  /* is_icmp_errmsg : flag if packet is an icmp error message
+  // NOTE: h_icmp is only valid if is_icmp is true
+  const auto h_icmp        = reinterpret_cast<const struct icmphdr*>(buffer + sizeof(ip));
+
+  /* === EVALUATE ICMP MESSAGES
+   * is_icmp_errmsg : flag if packet is an icmp error message
    *   reason : an echo packet could be used to establish an route without interference on application protos
+   * rm_route : flag, if packet isn't filtered (through split horizon or other peer filters), if primary router
+   *              is considered outdated ^^ see @ 'drop outdated routing table entries'
    */
-  const bool is_icmp_errmsg = is_icmp && ([buffer] {
-    switch(reinterpret_cast<struct icmphdr*>(buffer + sizeof(ip))->type) {
+  bool rm_route = false;
+  const bool is_icmp_errmsg = is_icmp && ([h_icmp, &rm_route] {
+    switch(h_icmp->type) {
       case ICMP_ECHOREPLY: // = 0
       case ICMP_ECHO:      // = 8
       case  9: // Router advert
@@ -637,6 +650,21 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
       case 13: // timestamp
       case 14: // timestamp reply
         return false;
+
+      case ICMP_TIMXCEED:
+        if(h_icmp->code == ICMP_TIMXCEED_INTRANS)
+          rm_route = true;
+        return true;
+
+      case ICMP_UNREACH:
+        switch(h_icmp->code) {
+          case ICMP_UNREACH_HOST:
+          case ICMP_UNREACH_NET:
+            rm_route = true;
+            break;
+          default: break;
+        }
+
       default:
         return true;
     }
@@ -683,7 +711,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   } else if(!have_route(ip_dst.s_addr)) {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
     ret = get_map_keys(remotes);
-    if(iam_ep) ret.push_back(local_ip.s_addr);
+    if(iam_ep) ret.emplace_back(local_ip.s_addr);
     sortify(ret);
     if(iam_ep) uniquify(ret);
     is_broadcast = true;
@@ -717,73 +745,54 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
         route->del_primary_router();
       }
     }
-  } else {
-    if(is_icmp) {
-      const auto h_icmp = reinterpret_cast<const struct icmphdr*>(buffer + sizeof(ip));
-      if(is_icmp_errmsg && ((2 * sizeof(struct ip) + sizeof(struct icmphdr)) <= buflen)) {
-        // drop outdated routing table entries
-        bool rm_route = false;
-        switch(h_icmp->type) {
-          case ICMP_TIMXCEED:
-            if(h_icmp->code == ICMP_TIMXCEED_INTRANS) rm_route = true;
-            break;
+    return;
+  }
 
-          case ICMP_UNREACH:
-            switch(h_icmp->code) {
-              case ICMP_UNREACH_HOST:
-              case ICMP_UNREACH_NET:
-                rm_route = true;
-                break;
-              default: break;
-            }
-            break;
-
-          default: break;
-        }
-        if(rm_route) {
-          // drop routing table entry, if there is any
-          //  target = original destination
-          const auto target = reinterpret_cast<const struct ip*>(buffer +
-                              sizeof(struct ip) + sizeof(struct icmphdr))->ip_dst;
-          if(const auto r = have_route(target.s_addr)) {
-            if(r->del_router(source_peer_ip)) {
-              // routing table entry dropped
-              printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
-            }
-            // if there is a routing table entry left -> discard
-            if(!r->empty()) {
-              ret.clear();
-              return;
-            }
+  if(is_icmp) {
+    if(is_icmp_errmsg) {
+      if(rm_route && ((2 * sizeof(struct ip) + sizeof(struct icmphdr)) <= buflen)) {
+        // drop outdated routing table entry, if there is any
+        //  target = original destination
+        const auto target = reinterpret_cast<const struct ip*>(buffer +
+                            sizeof(struct ip) + sizeof(struct icmphdr))->ip_dst;
+        if(const auto r = have_route(target.s_addr)) {
+          if(r->del_router(source_peer_ip)) {
+            // routing table entry dropped
+            printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
+          }
+          // if there is a routing table entry left -> discard
+          if(!r->empty()) {
+            ret.clear();
+            return;
           }
         }
-      } else if(!is_broadcast) {
-        /** evaluate ping packets to determine the latency of this route
-         *  echoreply : source and destination are swapped
-         **/
-        const auto &echo = h_icmp->un.echo;
-        const ping_cache_t::data_t edat(ip_src.s_addr, ip_dst.s_addr, echo.id, echo.sequence);
-        switch(h_icmp->type) {
-          case ICMP_ECHO:
-            ping_cache.init(edat, ret.front());
-            break;
+      }
+    } else if(!is_broadcast) {
+      /** evaluate ping packets to determine the latency of this route
+       *  echoreply : source and destination are swapped
+       **/
+      const auto &echo = h_icmp->un.echo;
+      const ping_cache_t::data_t edat(ip_src.s_addr, ip_dst.s_addr, echo.id, echo.sequence);
+      switch(h_icmp->type) {
+        case ICMP_ECHO:
+          ping_cache.init(edat, ret.front());
+          break;
 
-          case ICMP_ECHOREPLY:
-            {
-              const auto m = ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl);
-              if(m.match)
-                if(const auto r = have_route(m.dst))
-                  r->update_router(m.router, m.hops, m.diff);
-            }
-            break;
+        case ICMP_ECHOREPLY:
+          {
+            const auto m = ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl);
+            if(m.match)
+              if(const auto r = have_route(m.dst))
+                r->update_router(m.router, m.hops, m.diff);
+          }
+          break;
 
-          default: break;
-        }
+        default: break;
       }
     }
-
-    sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
   }
+
+  sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
 }
 
 /** is_ipv4_packet
@@ -794,20 +803,20 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
  * @ret           is valid
  **/
 static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) {
-  if(sizeof(struct ip) > len) {
-    printf("ROUTER ERROR: received invalid ip packet (too small, size = %u) from %s\n", len, source_desc_c);
-    return false;
-  }
-
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
-  if(h_ip->ip_v != 4) {
-    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u) from %s\n", h_ip->ip_v, source_desc_c);
+
+  if(sizeof(struct ip) > len) {
+    printf("ROUTER ERROR: received invalid ip packet (too small, size = %u)", len);
+  } else if(h_ip->ip_v != 4) {
+    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u)", h_ip->ip_v);
   } else if(const uint16_t dsum = IN_CKSUM(h_ip)) {
-    printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from %s\n",
-           h_ip->ip_sum, dsum, source_desc_c);
+    printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u)",
+           h_ip->ip_sum, dsum);
   } else {
     return true;
   }
+
+  printf(" from %s\n", source_desc_c);
   return false;
 }
 
@@ -828,7 +837,6 @@ static void zprn_routemod_handler(const char *const source_desc_c, const uint32_
   if(r && r->del_router(srca))
     printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
 
-  bool doit = true;
   zprn msg;
   msg.zprn_cmd = ZPRN_ROUTEMOD;
   msg.zprn_un.route.dsta = dsta;
@@ -838,9 +846,9 @@ static void zprn_routemod_handler(const char *const source_desc_c, const uint32_
   else if(r && !r->empty()) // we have a route
     msg.zprn_prio = r->_routers.front().hops;
   else
-    doit = false;
+    return;
 
-  if(doit) send_zprn_msg(msg);
+  send_zprn_msg(msg);
 }
 
 static void zprn_connmgmt_handler(const char *const source_desc_c, const uint32_t srca, const zprn &d) noexcept {
@@ -898,7 +906,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   // get total length
   len = ntohs(h_ip->ip_len);
 
-  if(nread < len) {
+  if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u) from %s\n", nread, source_desc_c);
   } else if(have_local_ip && h_ip->ip_src == local_ip) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
@@ -1028,7 +1036,7 @@ int main(int argc, char *argv[]) {
 
       last_time = time(nullptr);
 
-      uint16_t nread;
+      uint16_t nread = BUFSIZE;
       char buffer[BUFSIZE];
 
       if(FD_ISSET(local_fd, &rd_set)) {
@@ -1039,9 +1047,8 @@ int main(int argc, char *argv[]) {
       }
 
       if(FD_ISSET(server_fd, &rd_set)) {
-        struct in_addr addr;
         // data from the network: read it, and write it to the tun/tap interface.
-        nread = BUFSIZE;
+        struct in_addr addr;
         if(read_packet(addr, buffer, nread))
           route_packet(addr.s_addr, buffer, nread);
       }
