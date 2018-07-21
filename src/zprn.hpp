@@ -6,6 +6,7 @@
 #pragma once
 #include <inttypes.h>
 #include <vector>
+#include <config.h>
 
 #pragma pack(push, 1)
 struct zprn {
@@ -33,6 +34,6 @@ struct zprn {
   } zprn_un;
 
   zprn() noexcept;
-  bool valid() const noexcept;
+  bool valid() const noexcept zs_attrib_pure;
 };
 #pragma pack(pop)

@@ -1008,10 +1008,12 @@ int main(int argc, char *argv[]) {
   my_signal(SIGTERM, do_shutdown);
 
   int retcode = 0;
+
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
-  vector<zs_addr_t> discard_remotes;
-  vector<size_t>    found_remotes;
+  vector<size_t> found_remotes;
   unordered_map<zs_addr_t, zs_addr_t> tr_remotes;
+
+  found_remotes.reserve(zprd_conf.remotes.size());
 
   const auto del_route_msg = [](const zs_addr_t addr, const zs_addr_t router) {
     // discard route
@@ -1060,21 +1062,20 @@ int main(int argc, char *argv[]) {
       if(last_time == pastt) continue;
     }
 
-    found_remotes.reserve(zprd_conf.remotes.size());
-
     for(auto &i : remotes) {
-      if(i.second.cent)
-        found_remotes.push_back(i.second.cent - 1);
+      auto &pdat = i.second;
+      if(pdat.cent)
+        found_remotes.emplace_back(pdat.cent - 1);
 
       // skip local, and remotes which aren't timed out
-      if(i.first == local_ip.s_addr || (last_time - zprd_conf.remote_timeout) < i.second.seen)
+      if(i.first == local_ip.s_addr || (last_time - zprd_conf.remote_timeout) < pdat.seen)
         continue;
 
-      if(i.second.cent) {
+      if(pdat.cent) {
         // try to update ip
         struct in_addr remote;
-        if(resolve_hostname(i.second.cfgent_name(), remote)) {
-          i.second.seen = last_time;
+        if(resolve_hostname(pdat.cfgent_name(), remote)) {
+          pdat.seen = last_time;
           if(remote.s_addr != i.first) {
             tr_remotes[i.first] = remote.s_addr;
             for(auto &r: routes)
@@ -1088,7 +1089,7 @@ int main(int argc, char *argv[]) {
         if(r.second.del_router(i.first))
           del_route_msg(r.first, i.first);
 
-      discard_remotes.emplace_back(i.first);
+      pdat.to_discard = true;
     }
 
     auto fut_ufr = async(launch::async, [&found_remotes]
@@ -1098,9 +1099,6 @@ int main(int argc, char *argv[]) {
       mutex peermtx;
       // replace remotes (after cleanup -> lesser remotes to process)
       auto fut_trr = async(launch::async, [&] {
-# ifndef HAVE_MAP_EXTRACT
-        discard_remotes.reserve(discard_remotes.size() + tr_remotes.size());
-# endif
         {
           lock_guard<mutex> pl(peermtx);
           remotes.reserve(remotes.size() + tr_remotes.size());
@@ -1110,13 +1108,13 @@ int main(int argc, char *argv[]) {
             nh.key() = i.second;
             remotes.insert(std::move(nh));
 # else
-            remotes[i.second] = std::move(remotes[i.first]);
-            discard_remotes.emplace_back(i.first);
+            auto &rfr = remotes[i.first];
+            remotes[i.second] = std::move(rfr);
+            rfr.to_discard = true;
 # endif
           }
         }
         tr_remotes.clear();
-        sortify(discard_remotes);
       });
 
       // cleanup routes, needs to be done after del_router calls
@@ -1144,9 +1142,8 @@ int main(int argc, char *argv[]) {
       }
     } {
       // discard remotes (after cleanup -> cleanup has a chance to notify them)
-      GET_REM_PEER(discard_remotes);
       for(auto it = remotes.cbegin(); it != remotes.cend();) {
-        if(rem_peer(it->first))
+        if(it->second.to_discard)
           it = remotes.erase(it);
         else
           ++it;
