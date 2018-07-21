@@ -335,21 +335,6 @@ static bool init_all(const string &confpath) {
   return true;
 }
 
-static route_via_t* have_route(const zs_addr_t dsta) noexcept {
-  const auto it = routes.find(dsta);
-  return (
-    (it == routes.end() || it->second.empty())
-      ? nullptr : &(it->second)
-  );
-}
-
-// get_remote_desc: returns a description string of socket ip
-static string get_remote_desc(const zs_addr_t addr) {
-  return (addr == local_ip.s_addr)
-         ? string("local")
-         : (string("peer ") + inet_ntoa({addr}));
-}
-
 /** rem_peer_t
  * a functor which erases a vector item from a sorted vector
  **/
@@ -493,26 +478,6 @@ void sender_t::stop() noexcept {
   _cond.notify_all();
 }
 
-/** get_map_keys
- * generate a sorted vector from the keys of an map
- **/
-template<class Cont>
-static auto get_map_keys(const Cont &c) {
-  vector<typename Cont::key_type> ret;
-  ret.reserve(c.size());
-  for(const auto &i : c) ret.emplace_back(i.first);
-
-  /* sort all elems in 'ret' */
-#ifdef TBB_FOUND
-  tbb::parallel_sort
-#else
-  std::sort
-#endif
-    (ret.begin(), ret.end());
-
-  return ret;
-}
-
 enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
@@ -569,6 +534,41 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
   // calculate icmp checksum
   h_icmp->checksum = IN_CKSUM(h_icmp);
   sender.enqueue(move(dat));
+}
+
+static route_via_t* have_route(const zs_addr_t dsta) noexcept {
+  const auto it = routes.find(dsta);
+  return (
+    (it == routes.end() || it->second.empty())
+      ? nullptr : &(it->second)
+  );
+}
+
+// get_remote_desc: returns a description string of socket ip
+static string get_remote_desc(const zs_addr_t addr) {
+  return (addr == local_ip.s_addr)
+         ? string("local")
+         : (string("peer ") + inet_ntoa({addr}));
+}
+
+/** get_map_keys
+ * generate a sorted vector from the keys of an map
+ **/
+template<class Cont>
+static auto get_map_keys(const Cont &c) {
+  vector<typename Cont::key_type> ret;
+  ret.reserve(c.size());
+  for(const auto &i : c) ret.emplace_back(i.first);
+
+  /* sort all elems in 'ret' */
+#ifdef TBB_FOUND
+  tbb::parallel_sort
+#else
+  std::sort
+#endif
+    (ret.begin(), ret.end());
+
+  return ret;
 }
 
 static void send_zprn_msg(const zprn &msg) {
