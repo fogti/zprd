@@ -389,8 +389,8 @@ class rem_peer_t final {
 
   bool operator()(const T &item) const noexcept {
     // perform a binary find
-    const auto it = lower_bound(_vec.begin(), _vec.end(), item);
-    if(it == _vec.end() || *it != item) return false;
+    const auto it = lower_bound(_vec.cbegin(), _vec.cend(), item);
+    if(it == _vec.cend() || *it != item) return false;
     // erase element
     // NOTE: don't swap [back] with [*it], as that destructs sorted range
     _vec.erase(it);
@@ -709,28 +709,22 @@ static void route_packet(const zs_addr_t source_peer_ip, char buffer[], const ui
 
   // get route to destination
   if(have_local_ip && ip_dst == local_ip) {
-    if(routes[local_ip.s_addr].add_router(local_ip.s_addr, 0))
-      printf("ROUTER: add route to %s via local\n", inet_ntoa(ip_dst));
-  } else if(!have_route(ip_dst.s_addr)) {
+    ret.emplace_back(local_ip.s_addr);
+  } else if(const auto r = have_route(ip_dst.s_addr)) {
+    ret.emplace_back(r->get_router());
+  } else {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-    ret = get_map_keys(remotes);
-    if(iam_ep) ret.emplace_back(local_ip.s_addr);
-    sortify(ret);
-    if(iam_ep) uniquify(ret);
+    ret = sortify_move(get_map_keys(remotes));
+    // catch bouncing packets in *local iface* network earlier
+    // NOTE: local_ip may be in remotes keys
+    rem_peer(local_ip.s_addr);
     is_broadcast = true;
-    goto cont_broadcast;
   }
-
-  // if(!is_broadcast)
-  ret.emplace_back(routes[ip_dst.s_addr].get_router());
-
- cont_broadcast:
-  // catch bouncing packets in *local iface* network earlier
-  // NOTE: local_ip may be in remotes keys
-  if(!iam_ep) rem_peer(local_ip.s_addr);
 
   // split horizon
   rem_peer(source_peer_ip);
+
+  // assert(!iam_ep && !rem_peer(local_ip.s_addr));
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);

@@ -44,8 +44,8 @@ if(USE_ABI_32)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32")
 endif()
 
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -fno-unwind-tables -fno-asynchronous-unwind-tables")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables")
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -fno-plt -fno-unwind-tables -fno-asynchronous-unwind-tables")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-plt -fno-rtti -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables")
 
 add_executable(zprd src/main.cxx src/cksum.cxx src/crw.c src/hash.c src/ping_cache.cxx
                     src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx src/zsig.c)
