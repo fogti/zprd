@@ -51,7 +51,8 @@
 #endif
 
 // own parts
-#include "addr.hpp"
+#include <addr.hpp>
+#include <addr_t.hpp>
 #include "crest.h"
 #include "crw.h"
 #include "ping_cache.hpp"
@@ -74,7 +75,7 @@ time_t last_time;
 
 struct send_data final {
   vector<char> buffer;
-  vector<uint32_t> dests;
+  vector<zs_addr_t> dests;
   uint16_t frag;
   uint8_t  tos;
 
@@ -86,7 +87,7 @@ struct send_data final {
     : buffer(move(o.buffer)), dests(move(o.dests)),
       frag(o.frag), tos(o.tos) { }
 
-  send_data(vector<char> &&buf, vector<uint32_t> &&d,
+  send_data(vector<char> &&buf, vector<zs_addr_t> &&d,
             const uint16_t frag_ = 0, const uint8_t tos_ = 0) noexcept
     : buffer(move(buf)), dests(move(d)), frag(frag_), tos(tos_) { }
 
@@ -129,8 +130,8 @@ class sender_t final {
  **/
 static int local_fd, server_fd;
 
-static unordered_map<uint32_t, remote_peer_t> remotes;
-static unordered_map<uint32_t, route_via_t> routes;
+static unordered_map<zs_addr_t, remote_peer_t> remotes;
+static unordered_map<zs_addr_t, route_via_t> routes;
 
 static sender_t     sender;
 static ping_cache_t ping_cache;
@@ -334,7 +335,7 @@ static bool init_all(const string &confpath) {
   return true;
 }
 
-static route_via_t* have_route(const uint32_t dsta) noexcept {
+static route_via_t* have_route(const zs_addr_t dsta) noexcept {
   const auto it = routes.find(dsta);
   return (
     (it == routes.end() || it->second.empty())
@@ -343,7 +344,7 @@ static route_via_t* have_route(const uint32_t dsta) noexcept {
 }
 
 // get_remote_desc: returns a description string of socket ip
-static string get_remote_desc(const uint32_t addr) {
+static string get_remote_desc(const zs_addr_t addr) {
   return (addr == local_ip.s_addr)
          ? string("local")
          : (string("peer ") + inet_ntoa({addr}));
@@ -534,7 +535,7 @@ enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
 
-static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const uint32_t source_ip) {
+static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const zs_addr_t source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   send_data dat{vector<char>(buflen, 0), {source_ip}};
   char *const buffer = dat.buffer.data();
@@ -587,7 +588,7 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<uint32_t> peers = sortify_move(get_map_keys(remotes));
+  vector<zs_addr_t> peers = sortify_move(get_map_keys(remotes));
   GET_REM_PEER(peers);
 
   // filter local tun interface
@@ -617,7 +618,7 @@ static void send_zprn_msg(const zprn &msg) {
  * @ret             none
  **/
 [[gnu::hot]]
-static void route_packet(const uint32_t source_peer_ip, char buffer[], const uint16_t buflen) {
+static void route_packet(const zs_addr_t source_peer_ip, char buffer[], const uint16_t buflen) {
   remotes[source_peer_ip].seen = last_time;
 
   const string source_desc = get_remote_desc(source_peer_ip);
@@ -698,7 +699,7 @@ static void route_packet(const uint32_t source_peer_ip, char buffer[], const uin
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
-  vector<uint32_t> ret;
+  vector<zs_addr_t> ret;
   GET_REM_PEER(ret);
 
   // is a broadcast needed
@@ -821,9 +822,9 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
 }
 
 // handlers for incoming ZPRN packets
-typedef void (*zprn_handler_t)(const char * const, const uint32_t, const zprn&);
+typedef void (*zprn_handler_t)(const char * const, const zs_addr_t, const zprn&);
 
-static void zprn_routemod_handler(const char *const source_desc_c, const uint32_t srca, const zprn &d) {
+static void zprn_routemod_handler(const char *const source_desc_c, const zs_addr_t srca, const zprn &d) {
   const auto dsta = d.zprn_un.route.dsta;
   if(d.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
     // add route
@@ -851,7 +852,7 @@ static void zprn_routemod_handler(const char *const source_desc_c, const uint32_
   send_zprn_msg(msg);
 }
 
-static void zprn_connmgmt_handler(const char *const source_desc_c, const uint32_t srca, const zprn &d) noexcept {
+static void zprn_connmgmt_handler(const char *const source_desc_c, const zs_addr_t srca, const zprn &d) noexcept {
   const auto dsta = d.zprn_un.route.dsta;
   if(d.zprn_prio == ZPRN_CONNMGMT_OPEN) {
     if(routes[dsta].add_router(srca, 1))
@@ -1006,11 +1007,11 @@ int main(int argc, char *argv[]) {
 
   int retcode = 0;
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
-  vector<uint32_t> discard_remotes;
-  vector<size_t>   found_remotes;
-  unordered_map<uint32_t, uint32_t> tr_remotes;
+  vector<zs_addr_t> discard_remotes;
+  vector<size_t>    found_remotes;
+  unordered_map<zs_addr_t, zs_addr_t> tr_remotes;
 
-  const auto del_route_msg = [](const uint32_t addr, const uint32_t router) {
+  const auto del_route_msg = [](const zs_addr_t addr, const zs_addr_t router) {
     // discard route
     const auto d = get_remote_desc(router);
     printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr}), d.c_str());
@@ -1119,7 +1120,7 @@ int main(int argc, char *argv[]) {
       // cleanup routes, needs to be done after del_router calls
       for(auto it = routes.begin(); it != routes.end();) {
         auto &ise = it->second;
-        ise.cleanup([=](const uint32_t router) {
+        ise.cleanup([=](const zs_addr_t router) {
           del_route_msg(it->first, router);
         });
 
