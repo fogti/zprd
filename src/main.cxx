@@ -1010,10 +1010,8 @@ int main(int argc, char *argv[]) {
   int retcode = 0;
 
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
-  vector<size_t> found_remotes;
+  vector<bool> found_remotes(zprd_conf.remotes.size(), false);
   unordered_map<zs_addr_t, zs_addr_t> tr_remotes;
-
-  found_remotes.reserve(zprd_conf.remotes.size());
 
   const auto del_route_msg = [](const zs_addr_t addr, const zs_addr_t router) {
     // discard route
@@ -1065,7 +1063,7 @@ int main(int argc, char *argv[]) {
     for(auto &i : remotes) {
       auto &pdat = i.second;
       if(pdat.cent)
-        found_remotes.emplace_back(pdat.cent - 1);
+        found_remotes[pdat.cent - 1] = true;
 
       // skip local, and remotes which aren't timed out
       if(i.first == local_ip.s_addr || (last_time - zprd_conf.remote_timeout) < pdat.seen)
@@ -1091,9 +1089,6 @@ int main(int argc, char *argv[]) {
 
       pdat.to_discard = true;
     }
-
-    auto fut_ufr = async(launch::async, [&found_remotes]
-      { sortify(found_remotes); uniquify(found_remotes); });
 
     {
       mutex peermtx;
@@ -1150,26 +1145,20 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    fut_ufr.wait();
-    if(found_remotes.size() < zprd_conf.remotes.size()) {
-      size_t i = 0;
-      auto frit = found_remotes.cbegin();
-      const auto frie = found_remotes.cend();
-      for(const auto &r : zprd_conf.remotes) {
-        if(frit != frie && i < *frit) {
-          // remote from config wasn't found in 'remotes' map
-          struct in_addr remote;
-          if(resolve_hostname(r.c_str(), remote)) {
-            remotes[remote.s_addr] = {i};
-            printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
-          }
-        } else {
-          ++frit;
+    size_t i = 0;
+    for(auto fri : found_remotes) {
+      if(fri) {
+        fri = false;
+      } else {
+        // remote from config wasn't found in 'remotes' map
+        struct in_addr remote;
+        if(resolve_hostname(zprd_conf.remotes[i].c_str(), remote)) {
+          remotes[remote.s_addr] = {i};
+          printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
         }
-        ++i;
       }
+      ++i;
     }
-    found_remotes.clear();
 
     // flush output
     fflush(stdout);
