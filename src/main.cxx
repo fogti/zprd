@@ -459,17 +459,17 @@ void sender_t::worker_fn() noexcept {
       auto buf = dat.buffer.data();
       const auto buflen = dat.buffer.size();
 
-      // update checksum if ipv4
-      {
-        const auto h_ip = reinterpret_cast<struct ip*>(buf);
-        if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
-          h_ip->ip_sum = IN_CKSUM(h_ip);
-      }
-
       // send data
-      if(make_rem_peer(dat.dests)(local_ip.s_addr) && write(local_fd, buf, buflen) < 0) {
-        got_error = true;
-        perror("write()");
+      if(make_rem_peer(dat.dests)(local_ip.s_addr)) {
+        { // update checksum if ipv4
+          const auto h_ip = reinterpret_cast<struct ip*>(buf);
+          if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
+            h_ip->ip_sum = IN_CKSUM(h_ip);
+        }
+        if(write(local_fd, buf, buflen) < 0) {
+          got_error = true;
+          perror("write()");
+        }
       }
 
       if(dat.dests.empty()) continue;
@@ -806,9 +806,6 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
     printf("ROUTER ERROR: received invalid ip packet (too small, size = %u)", len);
   } else if(h_ip->ip_v != 4) {
     printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u)", h_ip->ip_v);
-  } else if(const uint16_t dsum = IN_CKSUM(h_ip)) {
-    printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u)",
-           h_ip->ip_sum, dsum);
   } else {
     return true;
   }
@@ -869,7 +866,7 @@ static void zprn_connmgmt_handler(const char *const source_desc_c, const zs_addr
 /** read_packet
  * reads an variable length packet
  *
- * @param srca    (out) the source ip
+ * @param srca    (out) the source ip (router)
  * @param buffer  (out) the target storage (with size len)
  * @param len     (in/out) the length of the packet
  * @ret           succesful marker
@@ -896,9 +893,17 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
     }
   }
 
-  if(!is_ipv4_packet(source_desc_c, buffer, nread)) return false;
+  if(!is_ipv4_packet(source_desc_c, buffer, nread))
+    return false;
 
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
+
+  if(have_local_ip && srca == local_ip)
+    if(const uint16_t dsum = IN_CKSUM(h_ip)) {
+      printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
+        h_ip->ip_sum, dsum);
+      return false;
+    }
 
   // get total length
   len = ntohs(h_ip->ip_len);
