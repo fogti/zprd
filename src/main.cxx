@@ -1146,14 +1146,18 @@ int main(int argc, char *argv[]) {
     fut_ufr.wait();
     if(found_remotes.size() < zprd_conf.remotes.size()) {
       size_t i = 0;
-      GET_REM_PEER(found_remotes);
+      auto frit = found_remotes.cbegin();
+      const auto frie = found_remotes.cend();
       for(const auto &r : zprd_conf.remotes) {
-        if(rem_peer(i)) {
+        if(frit != frie && i < *frit) {
+          // remote from config wasn't found in 'remotes' map
           struct in_addr remote;
           if(resolve_hostname(r.c_str(), remote)) {
             remotes[remote.s_addr] = {i};
             printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
           }
+        } else {
+          ++frit;
         }
         ++i;
       }
