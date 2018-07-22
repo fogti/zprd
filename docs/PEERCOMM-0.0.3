@@ -1,5 +1,0 @@
-NOTE for zprd-0.0.3 - peer communication:
-
-We switched from TCP to UDP (lesser overheader, 20 bytes -> 8 bytes for transport).
-In the new version, we silently register new clients,
-and we discard them after a timeout (no data from peer since 15 minutes).

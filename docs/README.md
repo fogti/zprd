@@ -16,6 +16,6 @@ This folder contains additional documentation and examples for the ZPRD.
    - ```zprpd```	  ping daemon
 
  - ```DEPENDS```	list of dependencies of this package
- - ```PEERCOMM-*```	notes about connections / communication with peers
+ - ```PEERCOMM```	notes about connections / communication with peers
  - ```README.md```	this overview
  - ```SOURCES```	list of other works (URLS to source) this software is based on
