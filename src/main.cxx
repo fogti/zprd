@@ -45,7 +45,6 @@
 #include <atomic>
 #include <future>
 
-
 // own parts
 #include <config.h>
 #include <addr.hpp>
@@ -284,8 +283,13 @@ static bool init_all(const string &confpath) {
 
       puts("running daemon as group: 'nogroup'");
       struct group *grresult = getgrnam("nogroup");
-      const gid_t newgid = grresult->gr_gid;
 
+      if(!grresult) {
+        perror("STARTUP ERROR: getgrnam() failed");
+        return false;
+      }
+
+      const gid_t newgid = grresult->gr_gid;
       setgroups(1, &newgid);
 #ifndef linux
       setegid(newgid);
