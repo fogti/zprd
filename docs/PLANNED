@@ -1,0 +1,23 @@
+Overview:
+
+  ZPRN || inner proto (e.g. currently IPv4 + ...)
+      ZPRD
+  outer proto (e.g. currently IPv4 + UDP)
+
+Planned Things:
+
+  ZPRN:
+   - possible: PROBE before DELETE
+     e.g. one node is outdated, first PROBE (when timeout) then DELETE (when timeout * 2)
+
+  inner proto:
+   - support for IPv6, and other protos
+     - 1. innner node's addr's
+     - 2. header manip (e.g. r:src, r:dst, w:ttl, ...)
+
+  outer proto:
+   - support for IPv6, and other protos
+     - 1. build datatype (struct { enum, char[X_MAX] }), consider saving PORT number, too
+     - 2. used in router fn's, routing tables, ...
+     - 3. used in read + sender
+     - 4. socket
