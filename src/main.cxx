@@ -543,6 +543,7 @@ static route_via_t* have_route(const zs_addr_t dsta) noexcept {
 }
 
 // get_remote_desc: returns a description string of socket ip
+[[gnu::hot]]
 static string get_remote_desc(const zs_addr_t addr) {
   return (addr == local_ip.s_addr)
          ? string("local")
@@ -596,12 +597,10 @@ static void send_zprn_msg(const zprn &msg) {
  * @ret             none
  **/
 [[gnu::hot]]
-static void route_packet(const zs_addr_t source_peer_ip, char buffer[], const uint16_t buflen) {
+static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
   if(!have_local_ip || source_peer_ip != local_ip.s_addr)
     remotes[source_peer_ip].seen = last_time;
 
-  const string source_desc = get_remote_desc(source_peer_ip);
-  const auto source_desc_c = source_desc.c_str();
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
   const bool is_icmp       = (h_ip->ip_p == IPPROTO_ICMP);
@@ -844,7 +843,7 @@ static void zprn_connmgmt_handler(const char *const source_desc_c, const zs_addr
  * @param len     (in/out) the length of the packet
  * @ret           succesful marker
  **/
-static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
+static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len, string &source_desc) {
   static const unordered_map<uint8_t, zprn_handler_t> zprn_dpt = {
     { ZPRN_ROUTEMOD, zprn_routemod_handler },
     { ZPRN_CONNMGMT, zprn_connmgmt_handler },
@@ -854,7 +853,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
   const uint16_t nread = recv_n(server_fd, buffer, len, &source);
   srca = source.sin_addr;
 
-  const string source_desc = get_remote_desc(srca.s_addr);
+  source_desc = get_remote_desc(srca.s_addr);
   const char * const source_desc_c = source_desc.c_str();
 
   {
@@ -883,6 +882,9 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len) {
 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
+  } else if(nread != len) {
+    printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
+    return true;
   } else if(have_local_ip && h_ip->ip_src == local_ip) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
   } else {
@@ -1018,14 +1020,15 @@ int main(int argc, char *argv[]) {
         // data from tun/tap: just read it and write it to the network
         nread = cread(local_fd, buffer, BUFSIZE);
         if(is_ipv4_packet("local", buffer, nread))
-          route_packet(local_ip.s_addr, buffer, nread);
+          route_packet(local_ip.s_addr, buffer, nread, "local");
       }
 
       if(FD_ISSET(server_fd, &rd_set)) {
         // data from the network: read it, and write it to the tun/tap interface.
         struct in_addr addr;
-        if(read_packet(addr, buffer, nread))
-          route_packet(addr.s_addr, buffer, nread);
+        string source_desc;
+        if(read_packet(addr, buffer, nread, source_desc))
+          route_packet(addr.s_addr, buffer, nread, source_desc.c_str());
       }
 
       // only cleanup things if at least 1 second passed since last iteration
