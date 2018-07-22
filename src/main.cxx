@@ -22,6 +22,7 @@
  **/
 
 #define __USE_MISC 1
+#include <grp.h>    // struct group
 #include <pwd.h>    // struct passwd
 #include <stdio.h>
 #include <string.h>
@@ -35,8 +36,6 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
-#include "config.h"
-
 // C++
 #include <unordered_map>
 #include <fstream>
@@ -46,11 +45,9 @@
 #include <atomic>
 #include <future>
 
-#ifdef TBB_FOUND
-# include <tbb/parallel_sort.h>
-#endif
 
 // own parts
+#include <config.h>
 #include <addr.hpp>
 #include <addr_t.hpp>
 #include "crest.h"
@@ -61,6 +58,11 @@
 #include "routes.hpp"
 #include "zprd_conf.hpp"
 #include "zprn.hpp"
+
+// TBB
+#ifdef TBB_FOUND
+# include <tbb/parallel_sort.h>
+#endif
 
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 0xffff
@@ -280,7 +282,30 @@ static bool init_all(const string &confpath) {
         return false;
       }
 
-      if(setuid(pwresult->pw_uid) < 0) {
+      puts("running daemon as group: 'nogroup'");
+      struct group *grresult = getgrnam("nogroup");
+      const gid_t newgid = grresult->gr_gid;
+
+      setgroups(1, &newgid);
+#ifndef linux
+      setegid(newgid);
+      if(setgid(newgid) < 0)
+#else
+      if(setregid(newgid, newgid) < 0)
+#endif
+      {
+        perror("STARTUP ERROR: set*gid() failed");
+        return false;
+      }
+
+      const uid_t newuid = pwresult->pw_uid;
+#ifndef linux
+      seteuid(newuid);
+      if(setuid(newuid) < 0)
+#else
+      if(setreuid(newuid, newuid) < 0)
+#endif
+      {
         perror("STARTUP ERROR: setuid() failed");
         return false;
       }
