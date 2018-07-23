@@ -144,8 +144,8 @@ static bool have_local_ip;
 
 static bool init_all(const string &confpath) {
   static const auto runcmd_fn = [](const string &cmd) -> bool {
-    if(system(cmd.c_str())) {
-      printf("CONFIG APPLY ERROR: %s\n", cmd.c_str());
+    if(const int ret = system(cmd.c_str())) {
+      printf("CONFIG APPLY ERROR: %s; $? = %d\n", cmd.c_str(), ret);
       perror("system()");
       return false;
     }
@@ -167,7 +167,7 @@ static bool init_all(const string &confpath) {
     close(ofd);
   }
 
-#define runcmd(X) do { const auto rcf_ret = runcmd_fn(X); if(!rcf_ret) return false; } while(false)
+#define runcmd(X) do { if(!runcmd_fn(X)) return false; } while(false)
 
   // read config
   {
@@ -445,7 +445,8 @@ void sender_t::worker_fn() noexcept {
       const auto buflen = dat.buffer.size();
 
       // send data
-      if(make_rem_peer(dat.dests)(local_ip.s_addr)) {
+      // NOTE: it is impossible that local_ip and others are destinations together
+      if(dat.dests.front() == local_ip.s_addr) {
         { // update checksum if ipv4
           const auto h_ip = reinterpret_cast<struct ip*>(buf);
           if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
@@ -455,9 +456,8 @@ void sender_t::worker_fn() noexcept {
           got_error = true;
           perror("write()");
         }
+        continue;
       }
-
-      if(dat.dests.empty()) continue;
 
       { // setup outer Dont-Frag bit
         const bool cdf = dat.frag & htons(IP_DF);
@@ -607,8 +607,10 @@ static void send_zprn_msg(const zprn &msg) {
     if(const auto r = have_route(msg.zprn_un.route.dsta))
       make_rem_peer(peers)(r->get_router());
 
-  const auto msgptr = reinterpret_cast<const char *>(&msg);
-  sender.enqueue({{msgptr, msgptr + sizeof(msg)}, move(peers)});
+  if(!peers.empty()) {
+    const auto msgptr = reinterpret_cast<const char *>(&msg);
+    sender.enqueue({{msgptr, msgptr + sizeof(msg)}, move(peers)});
+  }
 }
 
 /** route_packet:
@@ -725,19 +727,19 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
 
   if(ret.empty()) {
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
-    if(!is_icmp_errmsg) {
-      send_icmp_msg((
-        (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
-          ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
-      ), h_ip, source_peer_ip);
+    if(is_icmp_errmsg) return;
 
-      // to prevent routing loops
-      // drop routing table entry, if there is any
-      if(const auto route = have_route(ip_dst.s_addr)) {
-        const auto d = get_remote_desc(route->get_router());
-        printf("ROUTER: delete route to %s via %s (invalid)\n", inet_ntoa(ip_dst), d.c_str());
-        route->del_primary_router();
-      }
+    send_icmp_msg((
+      (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
+        ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
+    ), h_ip, source_peer_ip);
+
+    // to prevent routing loops
+    // drop routing table entry, if there is any
+    if(const auto route = have_route(ip_dst.s_addr)) {
+      const auto d = get_remote_desc(route->get_router());
+      printf("ROUTER: delete route to %s via %s (invalid)\n", inet_ntoa(ip_dst), d.c_str());
+      route->del_primary_router();
     }
     return;
   }
@@ -755,10 +757,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
             printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
           }
           // if there is a routing table entry left -> discard
-          if(!r->empty()) {
-            ret.clear();
-            return;
-          }
+          if(!r->empty()) return;
         }
       }
     } else if(ret.size() == 1) {
@@ -776,7 +775,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
           {
             const auto m = ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl);
             if(m.match)
-              if(const auto r = have_route(m.dst))
+              if(const auto r = have_route(edat.src))
                 r->update_router(m.router, m.hops, m.diff);
           }
           break;

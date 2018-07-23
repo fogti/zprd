@@ -10,7 +10,7 @@ class ping_cache_t final {
  public:
   struct match_t final {
     double diff;
-    zs_addr_t dst, router;
+    zs_addr_t router;
     uint8_t hops;
     bool match;
   };
