@@ -708,9 +708,6 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
 
   vector<zs_addr_t> ret;
 
-  // is a broadcast needed
-  bool is_broadcast = false;
-
   // get route to destination
   if(iam_ep && ip_dst == local_ip) {
     ret.emplace_back(local_ip.s_addr);
@@ -719,7 +716,6 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
   } else {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
     ret = get_map_keys(remotes);
-    is_broadcast = true;
   }
 
   // split horizon
@@ -765,7 +761,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
           }
         }
       }
-    } else if(!is_broadcast) {
+    } else if(ret.size() == 1) {
       /** evaluate ping packets to determine the latency of this route
        *  echoreply : source and destination are swapped
        **/
@@ -911,11 +907,11 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len, stri
 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
-  } else if(nread != len) {
-    printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
-    return true;
   } else if(have_local_ip && h_ip->ip_src == local_ip) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
+  } else if(zs_unlikely(nread != len)) {
+    printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
+    return true;
   } else {
     return true;
   }
@@ -923,9 +919,9 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len, stri
 }
 
 static string format_time(const time_t x) {
-  char buffer[10];
+  string buffer(10u, '\0');
   const struct tm *const tmi = localtime(&x);
-  strftime(buffer, 10, "%H:%M:%S", tmi);
+  strftime(&buffer.front(), 10, "%H:%M:%S", tmi);
   return buffer;
 }
 
@@ -951,9 +947,8 @@ static void print_routing_table(int) {
 
 static atomic<bool> b_do_shutdown;
 
-static void do_shutdown(int) noexcept {
-  b_do_shutdown = true;
-}
+static void do_shutdown(int) noexcept
+  { b_do_shutdown = true; }
 
 int main(int argc, char *argv[]) {
   { // parse command line
@@ -1013,6 +1008,7 @@ int main(int argc, char *argv[]) {
   int retcode = 0;
 
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
+  fd_set rd_set;
   vector<bool> found_remotes(zprd_conf.remotes.size(), false);
   unordered_map<zs_addr_t, zs_addr_t> tr_remotes;
 
@@ -1028,7 +1024,6 @@ int main(int argc, char *argv[]) {
       */
     { // use select() to handle two descriptors at once
       const auto pastt = last_time;
-      fd_set rd_set;
       FD_ZERO(&rd_set);
       FD_SET(local_fd, &rd_set);
       FD_SET(server_fd, &rd_set);
