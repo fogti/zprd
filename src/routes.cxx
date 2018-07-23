@@ -41,6 +41,17 @@ auto route_via_t::find_router(const zs_addr_t router) noexcept -> decltype(_rout
   );
 }
 
+static void update_hopcnt(uint8_t &oldhops, const uint8_t newhops) {
+  if(newhops > oldhops)
+    switch(newhops - oldhops) {
+      case 0xbe:
+      case 0xbf:
+        return;
+    }
+
+  oldhops = newhops;
+}
+
 bool route_via_t::add_router(const zs_addr_t router, const uint8_t hops) {
   if(empty()) _fresh_add = true;
   const auto it = find_router(router);
@@ -49,8 +60,7 @@ bool route_via_t::add_router(const zs_addr_t router, const uint8_t hops) {
     _routers.emplace_front(router, hops);
   } else {
     it->seen = last_time;
-    if((it->hops >= hops) || it->hops != (hops - 0xbf))
-      it->hops = hops;
+    update_hopcnt(it->hops, hops);
   }
   return ret;
 }
@@ -59,8 +69,7 @@ void route_via_t::update_router(const zs_addr_t router, const uint8_t hops, cons
   const auto it = find_router(router);
   if(zs_unlikely(it == _routers.end())) return;
   it->seen = last_time;
-  if((it->hops >= hops) || it->hops != (hops - 0xbf))
-    it->hops = hops;
+  update_hopcnt(it->hops, hops);
   it->latency = latency;
 }
 
