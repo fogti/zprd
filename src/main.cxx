@@ -860,6 +860,14 @@ static void zprn_connmgmt_handler(const char *const source_desc_c, const zs_addr
   }
 }
 
+static void print_packet(const char buffer[], const uint16_t len) {
+  printf("ROUTER DEBUG: pktdat:");
+  const char * const ie = buffer + std::min(len, static_cast<uint16_t>(80));
+  for(const char *i = buffer; i != ie; ++i)
+    printf(" %02x", static_cast<unsigned>(*i));
+  puts("");
+}
+
 /** read_packet
  * reads an variable length packet
  *
@@ -907,10 +915,12 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len, stri
 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
+    print_packet(buffer, nread);
   } else if(have_local_ip && h_ip->ip_src == local_ip) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
   } else if(zs_unlikely(nread != len)) {
     printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
+    print_packet(buffer, nread);
     return true;
   } else {
     return true;
