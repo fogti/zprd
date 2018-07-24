@@ -43,7 +43,8 @@
 #include <utility>
 
 #include <atomic>
-#include <future>
+#include <thread>
+#include <condition_variable>
 
 // own parts
 #include <config.h>
@@ -579,14 +580,13 @@ static string get_remote_desc(const zs_addr_t addr) {
          : (string("peer ") + inet_ntoa({addr}));
 }
 
-/** get_map_keys
- * generate a sorted vector from the keys of an map
+/** get_peers
+ * generate a sorted vector from the keys of remotes map
  **/
-template<class Cont>
-static auto get_map_keys(const Cont &c) {
-  vector<typename Cont::key_type> ret;
-  ret.reserve(c.size());
-  for(const auto &i : c) ret.emplace_back(i.first);
+static auto get_peers() {
+  vector<zs_addr_t> ret;
+  ret.reserve(remotes.size());
+  for(const auto &i : remotes) ret.emplace_back(i.first);
 
   /* sort all elems in 'ret' */
 #ifdef TBB_FOUND
@@ -600,7 +600,7 @@ static auto get_map_keys(const Cont &c) {
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<zs_addr_t> peers = get_map_keys(remotes);
+  vector<zs_addr_t> peers = get_peers();
 
   // split horizon
   if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
@@ -717,7 +717,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
     ret.emplace_back(r->get_router());
   } else {
     printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-    ret = get_map_keys(remotes);
+    ret = get_peers();
   }
 
   // split horizon
@@ -959,6 +959,12 @@ static atomic<bool> b_do_shutdown;
 static void do_shutdown(int) noexcept
   { b_do_shutdown = true; }
 
+static void del_route_msg(const decltype(routes)::value_type &addr_v, const zs_addr_t router) {
+  // discard route message
+  const auto d = get_remote_desc(router);
+  printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr_v.first}), d.c_str());
+}
+
 int main(int argc, char *argv[]) {
   { // parse command line
     string confpath = "/etc/zprd.conf";
@@ -1020,12 +1026,6 @@ int main(int argc, char *argv[]) {
   fd_set rd_set;
   vector<bool> found_remotes(zprd_conf.remotes.size(), false);
   unordered_map<zs_addr_t, zs_addr_t> tr_remotes;
-
-  const auto del_route_msg = [](const zs_addr_t addr, const zs_addr_t router) {
-    // discard route
-    const auto d = get_remote_desc(router);
-    printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr}), d.c_str());
-  };
 
   while(!b_do_shutdown) {
     /* last_time - global time, updated after select
@@ -1093,64 +1093,53 @@ int main(int argc, char *argv[]) {
 
       for(auto &r: routes)
         if(r.second.del_router(i.first))
-          del_route_msg(r.first, i.first);
+          del_route_msg(r, i.first);
 
       pdat.to_discard = true;
     }
 
-    {
-      mutex peermtx;
-      // replace remotes (after cleanup -> lesser remotes to process)
-      auto fut_trr = async(launch::async, [&] {
-        {
-          lock_guard<mutex> pl(peermtx);
-          remotes.reserve(remotes.size() + tr_remotes.size());
-          for(auto &i : tr_remotes) {
+    // replace remotes (after cleanup -> lesser remotes to process)
+    remotes.reserve(remotes.size() + tr_remotes.size());
+    for(auto &i : tr_remotes) {
 # ifdef HAVE_MAP_EXTRACT
-            auto nh = remotes.extract(i.first);
-            nh.key() = i.second;
-            remotes.insert(std::move(nh));
+      auto nh = remotes.extract(i.first);
+      nh.key() = i.second;
+      remotes.insert(std::move(nh));
 # else
-            auto &rfr = remotes[i.first];
-            remotes[i.second] = std::move(rfr);
-            rfr.to_discard = true;
+      auto &rfr = remotes[i.first];
+      remotes[i.second] = std::move(rfr);
+      rfr.to_discard = true;
 # endif
-          }
-        }
-        tr_remotes.clear();
-      });
+    }
+    tr_remotes.clear();
 
-      // cleanup routes, needs to be done after del_router calls
-      for(auto it = routes.begin(); it != routes.end();) {
-        auto &ise = it->second;
-        ise.cleanup([=](const zs_addr_t router) {
-          del_route_msg(it->first, router);
-        });
+    // cleanup routes, needs to be done after del_router calls
+    for(auto it = routes.begin(); it != routes.end();) {
+      auto &ise = it->second;
+      ise.cleanup([=](const zs_addr_t router)
+        { del_route_msg(*it, router); });
 
-        const bool iee = ise.empty();
-        if(iee || ise._fresh_add) {
-          ise._fresh_add = false;
+      const bool iee = ise.empty();
+      if(iee || ise._fresh_add) {
+        ise._fresh_add = false;
 
-          msg.zprn_cmd = ZPRN_ROUTEMOD;
-          msg.zprn_un.route.dsta = it->first;
-          msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
-          // this is the only part of this loop which uses remotes
-          lock_guard<mutex> pl(peermtx);
-          send_zprn_msg(msg);
-        }
-
-        // NOTE: don't use *it after erase (see Issue #1)
-        if(iee) it = routes.erase(it);
-        else ++it;
+        msg.zprn_cmd = ZPRN_ROUTEMOD;
+        msg.zprn_un.route.dsta = it->first;
+        msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
+        send_zprn_msg(msg);
       }
-    } {
-      // discard remotes (after cleanup -> cleanup has a chance to notify them)
-      for(auto it = remotes.cbegin(); it != remotes.cend();) {
-        if(it->second.to_discard)
-          it = remotes.erase(it);
-        else
-          ++it;
-      }
+
+      // NOTE: don't use *it after erase (see Issue #1)
+      if(iee) it = routes.erase(it);
+      else ++it;
+    }
+
+    // discard remotes (after cleanup -> cleanup has a chance to notify them)
+    for(auto it = remotes.cbegin(); it != remotes.cend();) {
+      if(it->second.to_discard)
+        it = remotes.erase(it);
+      else
+        ++it;
     }
 
     size_t i = 0;
