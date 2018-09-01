@@ -12,7 +12,7 @@ option(USE_ABI_32 "build 32bit executable" ON)
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 find_package(Threads REQUIRED)
-#find_package(LowlevelZS REQUIRED) # hash.hpp
+find_package(LowlevelZS REQUIRED)
 if(USE_TBB)
   find_package(TBB)
 else()
@@ -40,17 +40,12 @@ if(${TBB_FOUND})
   add_definitions(${TBB_DEFINITIONS})
 endif()
 
-if(USE_ABI_32)
-  set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -m32")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32")
-endif()
-
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -fno-plt -ftree-vectorize -fno-unwind-tables -fno-asynchronous-unwind-tables")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-plt -ftree-vectorize -fno-rtti -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables")
 
 add_executable(zprd src/main.cxx src/cksum.c src/crw.c src/ping_cache.cxx
-                    src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx src/zsig.c)
-target_link_libraries(zprd Threads::Threads)
+                    src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx)
+target_link_libraries(zprd Threads::Threads LowlevelZS::lowlevelzs)
 
 if(${TBB_FOUND})
   target_link_libraries(zprd ${TBB_LIBRARIES})

@@ -59,6 +59,9 @@
 #include "zprd_conf.hpp"
 #include "zprn.hpp"
 
+// -lowlevelzs
+#include <zs/ll/zsig.h>
+
 // TBB
 #ifdef TBB_FOUND
 # include <tbb/parallel_sort.h>
