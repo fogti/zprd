@@ -4,20 +4,37 @@ Overview:
       ZPRD
   outer proto (e.g. currently IPv4 + UDP)
 
+Motivation:
+  for port numbers in addr struct:
+   - better support for NAT'ed networks
+
 Planned Things:
 
   ZPRN:
    - possible: PROBE before DELETE
      e.g. one node is outdated, first PROBE (when timeout) then DELETE (when timeout * 2)
+     why: faster convergence
 
   inner proto:
    - support for IPv6, and other protos
-     - 1. innner node's addr's
-     - 2. header manip (e.g. r:src, r:dst, w:ttl, ...)
+     - 1. build datatype (struct { enum, char[X_MAX] }), or use a class hierarchy
+     - 2. innner node's addr's
+     - 3. header manip (e.g. r:src, r:dst, w:ttl, ...)
+     - 4. used in router fn's, routing tables, route_packet
+     - 5. used in send_packet:in_checksum
+     - 6. used in send_icmp_packet (needs to be conditional / implemented for other protos)
+     - 7. build an abstraction layer (interface, multiple classes, virtual methods) around (1.)
 
   outer proto:
    - support for IPv6, and other protos
      - 1. build datatype (struct { enum, char[X_MAX] }), consider saving PORT number, too
+       - could use sockaddr_storage (can hold any socket address) ...
      - 2. used in router fn's, routing tables, ...
      - 3. used in read + sender
-     - 4. socket
+     - 4. sockets
+     - 5. consider using poll(2) / epoll(7) (configure check)
+       - NOTE: we probably can't use libkqueue, because it needs 2 fds per socket
+               (1 for input, 1 for output)
+       - WHY:  we need to manage probably at least 1 fd per proto,
+               and select(2) is then probably too slow
+     - 6. build an abstration layer (interface functions, probably one class) around (1.)
