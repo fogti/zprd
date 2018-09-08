@@ -61,7 +61,7 @@ auto remote_peer_t::addr2string() const -> string {
       break;
  */
     default:
-      return "-unsupported-AF-";
+      return "-unsupported-AF-" + std::to_string(saddr.ss_family);
   }
 
   char *portptr = 0;
