@@ -5,12 +5,13 @@
  **/
 #pragma once
 #include <addr_t.hpp>
+#include "remote_peer.hpp"
 
 class ping_cache_t final {
  public:
   struct match_t final {
     double diff;
-    zs_addr_t router;
+    remote_peer_ptr_t router;
     uint8_t hops;
     bool match;
   };
@@ -27,14 +28,14 @@ class ping_cache_t final {
  private:
   double _seen;
   data_t _dat;
-  zs_addr_t _router;
+  remote_peer_ptr_t _router;
 
   static double get_ms_time() noexcept;
 
  public:
-  ping_cache_t() noexcept: _seen(0), _router(0) { }
+  ping_cache_t() noexcept: _seen(0) { }
 
-  void init(const data_t &dat, const zs_addr_t router) noexcept;
-  auto match(const data_t &dat, const zs_addr_t router, const uint8_t ttl)
+  void init(const data_t &dat, const remote_peer_ptr_t &router) noexcept;
+  auto match(const data_t &dat, const remote_peer_ptr_t &router, const uint8_t ttl)
        noexcept -> match_t;
 };
