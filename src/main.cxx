@@ -209,8 +209,8 @@ static void connect2server(const string &r, const size_t cent) {
   struct sockaddr_storage remote;
   if(resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af)) {
     auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
-    const string remote_desc = ptr->addr2string();
     ptr->set_port(zprd_conf.data_port, false);
+    const string remote_desc = ptr->addr2string();
     remotes.emplace_back(move(ptr));
     printf("CLIENT: connected to server %s\n", remote_desc.c_str());
   }
