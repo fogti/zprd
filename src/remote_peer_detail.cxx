@@ -5,17 +5,27 @@
  **/
 
 #include "remote_peer.hpp"
+#include <utility>
 
 extern time_t last_time;
 
-remote_peer_detail_t::remote_peer_detail_t(const remote_peer_t &o) noexcept
-  : remote_peer_t(o), seen(last_time), cent(0), to_discard(false) { }
+remote_peer_detail_t::remote_peer_detail_t() noexcept
+  : seen(last_time), cent(0), to_discard(false), to_proceed(false) { }
 
 remote_peer_detail_t::remote_peer_detail_t(const sockaddr_storage &sas) noexcept
-  : remote_peer_detail_t(remote_peer_t(sas)) { }
+  : remote_peer_t(sas), seen(last_time), cent(0), to_discard(false), to_proceed(false) { }
+
+remote_peer_detail_t::remote_peer_detail_t(const remote_peer_t &o) noexcept
+  : remote_peer_detail_t(o.get_saddr()) { }
+
+remote_peer_detail_t::remote_peer_detail_t(remote_peer_t &&o) noexcept
+  : remote_peer_detail_t(o.saddr) { }
 
 remote_peer_detail_t::remote_peer_detail_t(const remote_peer_t &o, const size_t cfgent) noexcept
   : remote_peer_detail_t(o) { cent = cfgent + 1; }
+
+remote_peer_detail_t::remote_peer_detail_t(remote_peer_t &&o, const size_t cfgent) noexcept
+  : remote_peer_detail_t(std::move(o)) { cent = cfgent + 1; }
 
 #include "zprd_conf.hpp"
 

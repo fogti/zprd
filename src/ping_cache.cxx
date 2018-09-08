@@ -15,13 +15,13 @@ double ping_cache_t::get_ms_time() noexcept {
   return curt.tv_sec * 1000 + curt.tv_nsec / 1000000.0;
 }
 
-void ping_cache_t::init(const data_t &dat, const zs_addr_t router) noexcept {
+void ping_cache_t::init(const data_t &dat, const remote_peer_ptr_t &router) noexcept {
   _seen   = get_ms_time();
   _dat    = dat;
   _router = router;
 }
 
-auto ping_cache_t::match(const data_t &dat, const zs_addr_t router, const uint8_t ttl) noexcept -> match_t {
+auto ping_cache_t::match(const data_t &dat, const remote_peer_ptr_t &router, const uint8_t ttl) noexcept -> match_t {
   // NOTE: src and dst are swapped between a and b
   if(_seen && std::tie( router,  dat.src,  dat.dst,  dat.id,  dat.seq) ==
               std::tie(_router, _dat.dst, _dat.src, _dat.id, _dat.seq)) {

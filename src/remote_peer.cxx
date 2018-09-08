@@ -6,6 +6,7 @@
  **/
 
 #include "remote_peer.hpp"
+#include <config.h>
 #include <zprd_conf.hpp>
 
 #include <stdio.h>
@@ -16,8 +17,11 @@
 remote_peer_t::remote_peer_t() noexcept
   { memset(&saddr, 0, sizeof(saddr)); }
 
-remote_peer_t::remote_peer_t(const sockaddr_storage &sas) noexcept
-  : saddr(sas) { }
+remote_peer_t::remote_peer_t(const struct sockaddr_storage &sas) noexcept
+  { set_saddr(sas, false); }
+
+remote_peer_t::remote_peer_t(remote_peer_t &&o) noexcept
+  { set_saddr(o.saddr, false); }
 
 remote_peer_t::remote_peer_t(const in_addr_t &x) noexcept {
   saddr.ss_family = AF_INET;
@@ -107,4 +111,19 @@ auto remote_peer_t::addr2string() const -> string {
 
   return {buf};
 #undef SA_PORT
+}
+
+auto remote_peer_t::get_saddr() const noexcept -> sockaddr_storage {
+  std::shared_lock<_mtx_t> lock(_mtx);
+  return saddr;
+}
+
+void remote_peer_t::set_saddr(const sockaddr_storage &sas, const bool do_lock) noexcept {
+  if(do_lock) {
+    std::unique_lock<_mtx_t> lock(_mtx);
+    // single self-recursion
+    set_saddr(sas, false);
+  } else {
+    memcpy(&saddr, &sas, sizeof(saddr));
+  }
 }

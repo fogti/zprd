@@ -24,6 +24,7 @@
 #define __USE_MISC 1
 #include <grp.h>    // struct group
 #include <pwd.h>    // struct passwd
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -40,6 +41,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 #include <atomic>
@@ -80,7 +82,7 @@ time_t last_time;
 
 struct send_data final {
   vector<char> buffer;
-  vector<remote_peer_t> dests;
+  vector<shared_ptr<remote_peer_t>> dests;
   uint16_t frag;
   uint8_t  tos;
 
@@ -92,7 +94,7 @@ struct send_data final {
     : buffer(move(o.buffer)), dests(move(o.dests)),
       frag(o.frag), tos(o.tos) { }
 
-  send_data(vector<char> &&buf, vector<remote_peer_t> &&d,
+  send_data(vector<char> &&buf, decltype(dests) &&d,
             const uint16_t frag_ = 0, const uint8_t tos_ = 0) noexcept
     : buffer(move(buf)), dests(move(d)), frag(frag_), tos(tos_) { }
 
@@ -135,8 +137,7 @@ class sender_t final {
  **/
 static int local_fd, server_fd;
 
-static size_t last_remote_id = 0;
-static unordered_map<size_t,    remote_peer_detail_t> remotes;
+static vector<shared_ptr<remote_peer_detail_t>> remotes;
 static unordered_map<zs_addr_t, route_via_t> routes;
 
 static sender_t     sender;
@@ -147,13 +148,18 @@ static bool have_local_ip;
 
 /*** helper functions ***/
 
-static bool resolve_remote_peer(const remote_peer_t &peer, size_t &result) noexcept {
-  for(const auto &i : remotes)
-    if(i.second == peer) {
-      result = i.first;
-      return true;
-    }
-  return false;
+static sa_family_t str2preferred_af(string afdesc) {
+  static const unordered_map<string, sa_family_t> trt = {
+    { "INET" , AF_INET  }, { "IPV4", AF_INET  },
+#ifdef USE_IPV6
+    { "INET6", AF_INET6 }, { "IPV6", AF_INET6 },
+#endif
+  };
+  std::transform(afdesc.begin(), afdesc.end(), afdesc.begin(), ::toupper);
+  const auto it = trt.find(afdesc);
+  if(it != trt.end()) return it->second;
+  printf("CONFIG WARNING: unsupported address_family AF_*: %s\n", afdesc.c_str());
+  return AF_UNSPEC;
 }
 
 static bool init_all(const string &confpath) {
@@ -193,7 +199,8 @@ static bool init_all(const string &confpath) {
 
     // DEFAULTS
     zprd_conf.data_port      = 45940; // P45940
-    zprd_conf.remote_timeout = 600;          // T600   = 10 min
+    zprd_conf.remote_timeout = 600;   // T600   = 10 min
+    zprd_conf.preferred_af   = AF_UNSPEC;
     local_ip.s_addr          = htonl(0);
     have_local_ip            = false;
 
@@ -202,18 +209,15 @@ static bool init_all(const string &confpath) {
 
     string addr_stmt, line;
     while(getline(in, line)) {
-      if(line.empty()) continue;
-      const string arg = line.substr(1);
+      if(line.empty() || line.front() == '#') continue;
+      string arg = line.substr(1);
       switch(line.front()) {
-        case '#':
-          break;
-
         case 'A':
-          addr_stmt = arg;
+          addr_stmt = move(arg);
           break;
 
         case 'I':
-          zprd_conf.iface = arg;
+          zprd_conf.iface = move(arg);
           break;
 
         case 'P':
@@ -221,7 +225,7 @@ static bool init_all(const string &confpath) {
           break;
 
         case 'R':
-          zprd_conf.remotes.push_back(arg);
+          zprd_conf.remotes.emplace_back(move(arg));
           break;
 
         case 'T':
@@ -229,7 +233,11 @@ static bool init_all(const string &confpath) {
           break;
 
         case 'U':
-          run_as_user = arg;
+          run_as_user = move(arg);
+          break;
+
+        case '^':
+          zprd_conf.preferred_af = str2preferred_af(move(arg));
           break;
 
         default:
@@ -249,15 +257,19 @@ static bool init_all(const string &confpath) {
     if(!addr_stmt.empty()) {
       const size_t marker = addr_stmt.find('/');
       const string ip = addr_stmt.substr(0, marker);
-      string cidrsf = "32";
-      if(marker != string::npos)
-        cidrsf = addr_stmt.substr(marker + 1);
+      const string cidrsf =
+        ((marker == string::npos)
+          ? "32"
+          : addr_stmt.substr(marker + 1));
 
-      if(!resolve_hostname(ip.c_str(), local_ip)) {
+      remote_peer_t rp_local;
+
+      if(!resolve_hostname(ip.c_str(), rp_local.saddr, AF_INET)) {
         fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: 'A%s'\n", addr_stmt.c_str());
         return false;
       }
 
+      local_ip = reinterpret_cast<struct sockaddr_in*>(&rp_local.saddr)->sin_addr;
       have_local_ip = true;
       local_netmask.s_addr = cidr_to_netmask(stoi(cidrsf));
 
@@ -277,7 +289,7 @@ static bool init_all(const string &confpath) {
       if_name[IFNAMSIZ - 1] = 0;
 
       if( (local_fd = tun_alloc(if_name, IFF_TUN | IFF_NO_PI)) < 0 ) {
-        fprintf(stderr, "failed to connect to interface '%s'\n", if_name);
+        fprintf(stderr, "ERROR: failed to connect to interface '%s'\n", if_name);
         return false;
       }
       zprd_conf.iface = if_name;
@@ -338,15 +350,17 @@ static bool init_all(const string &confpath) {
 
   {
     size_t i = 0;
-    struct in_addr remote;
+    struct sockaddr_storage remote;
+    remotes.reserve(zprd_conf.remotes.size());
     for(const auto &r : zprd_conf.remotes) {
-      if(resolve_hostname(r.c_str(), remote)) {
-        remotes[i] = remote_peer_detail_t(remote_peer_t(remote), i);
-        printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
+      if(resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af)) {
+        auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), i);
+        const string remote_desc = ptr->addr2string();
+        remotes.emplace_back(move(ptr));
+        printf("CLIENT: connected to server %s\n", remote_desc.c_str());
       }
       ++i;
     }
-    last_remote_id = i;
   }
 
   if(remotes.empty() && !zprd_conf.remotes.empty()) {
@@ -377,31 +391,27 @@ static bool init_all(const string &confpath) {
   return true;
 }
 
-/** rem_peer_t
- * a functor which erases a vector item from a sorted vector
- **/
-template<typename T>
-class rem_peer_t final {
-  vector<T> &_vec;
+template<typename T, typename Fn>
+static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
+  // perform a binary find
+  const auto it = lower_bound(vec.cbegin(), vec.cend(), item, fn);
+  if(it == vec.cend() || *it != item)
+   return false;
+  // erase element
+  // NOTE: don't swap [back] with [*it], as that destructs sorted range
+  vec.erase(it);
+  return true;
+}
 
- public:
-  explicit rem_peer_t(vector<T> &vec) noexcept: _vec(vec) { }
+static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
+  typedef remote_peer_ptr_t ptr_t;
+  if(xg_rem_peer(vec, item, less<ptr_t>())) return true;
+  if(xg_rem_peer(vec, item,
+    [](const ptr_t &a, const ptr_t &b) { return (*a) < (*b); }
+  )) return true;
 
-  bool operator()(const T &item) const noexcept {
-    // perform a binary find
-    const auto it = lower_bound(_vec.cbegin(), _vec.cend(), item);
-    if(it == _vec.cend() || *it != item) return false;
-    // erase element
-    // NOTE: don't swap [back] with [*it], as that destructs sorted range
-    _vec.erase(it);
-    return true;
-  }
-};
-
-/** helper for rem_peer_t **/
-template<typename T>
-auto make_rem_peer(vector<T> &vec) noexcept -> rem_peer_t<T>
-  { return rem_peer_t<T>(vec); }
+  return false;
+}
 
 void sender_t::worker_fn() noexcept {
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
@@ -455,7 +465,7 @@ void sender_t::worker_fn() noexcept {
 
       // send data
       // NOTE: it is impossible that local_ip and others are destinations together
-      if(dat.dests.front() == remote_peer_t()) {
+      if(dat.dests.empty()) {
         { // update checksum if ipv4
           const auto h_ip = reinterpret_cast<struct ip*>(buf);
           if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
@@ -476,11 +486,16 @@ void sender_t::worker_fn() noexcept {
       // setup outer TOS
       if(tos != dat.tos) set_tos(dat.tos);
 
-      for(const auto &i : dat.dests)
-        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&i.saddr), sizeof(i.saddr)) < 0) {
-          got_error = true;
-          perror("sendto()");
-        }
+      // TODO: use the correct server_fd depending on ss_family / AF_*
+      for(const auto &i : dat.dests) {
+        i->locked_crun([&](const remote_peer_t &o) noexcept {
+          if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
+            got_error = true;
+            perror("sendto()");
+          }
+          return true;
+        });
+      }
     }
 
     if(got_error) fflush(stderr);
@@ -488,7 +503,14 @@ void sender_t::worker_fn() noexcept {
 }
 
 void sender_t::enqueue(send_data &&dat) {
+  // sanitize dat.dests
+  if(dat.dests.empty())
+    return;
+  if(*dat.dests.front() == remote_peer_t())
+    dat.dests.clear();
   dat.dests.shrink_to_fit();
+
+  // move into queue
   {
     lock_guard<mutex> lock(_mtx);
     _tasks.emplace_back(std::move(dat));
@@ -516,9 +538,9 @@ enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
 
-static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const zs_addr_t source_ip) {
+static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const remote_peer_ptr_t &source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  send_data dat{vector<char>(buflen, 0), {remote_peer_t(source_ip)}};
+  send_data dat{vector<char>(buflen, 0), {source_ip}};
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
@@ -585,14 +607,28 @@ static string get_remote_desc(const zs_addr_t addr) {
          ? string("local")
          : (string("peer ") + inet_ntoa({addr}));
 }
+[[gnu::hot]]
+static string get_remote_desc(const remote_peer_t &addr) {
+  return (addr == remote_peer_t())
+         ? string("local")
+         : (string("peer ") + addr.addr2string());
+}
+[[gnu::hot]]
+static string get_remote_desc(const remote_peer_ptr_t &addr) {
+  if(addr.unique())
+    return get_remote_desc(addr);
+  return addr->locked_crun([](const remote_peer_t &o) {
+    return get_remote_desc(o);
+  });
+}
 
 /** get_peers
  * generate a sorted vector from the keys of remotes map
  **/
 static auto get_peers() {
-  vector<remote_peer_t> ret;
+  vector<remote_peer_ptr_t> ret;
   ret.reserve(remotes.size());
-  for(const auto &i : remotes) ret.emplace_back(i.second.saddr);
+  for(const auto &i : remotes) ret.emplace_back(i);
 
   /* sort all elems in 'ret' */
 #ifdef TBB_FOUND
@@ -611,7 +647,7 @@ static void send_zprn_msg(const zprn &msg) {
   // split horizon
   if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
     if(const auto r = have_route(msg.zprn_un.route.dsta))
-      make_rem_peer(peers)(r->get_router());
+      rem_peer(peers, r->get_router());
 
   if(!peers.empty()) {
     const auto msgptr = reinterpret_cast<const char *>(&msg);
@@ -634,11 +670,10 @@ static void send_zprn_msg(const zprn &msg) {
  * @ret             none
  **/
 [[gnu::hot]]
-static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
-  const size_t source_peer_id = resolve_remote_peer(remote_peer_t(source_peer_ip));
-
-  if(!have_local_ip || source_peer_ip != local_ip.s_addr)
-    remotes[source_peer_id].seen = last_time;
+static void route_packet(const shared_ptr<remote_peer_detail_t> &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
+  const bool source_is_local = have_local_ip && (*source_peer == remote_peer_t());
+  if(!source_is_local)
+    source_peer->seen = last_time;
 
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
@@ -692,14 +727,14 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
   const auto &ip_dst = h_ip->ip_dst;
 
   // am I an endpoint
-  const bool iam_ep = have_local_ip && (source_peer_ip == local_ip.s_addr || ip_dst == local_ip);
+  const bool iam_ep = have_local_ip && (source_is_local || ip_dst == local_ip);
 
   // we can use the ttl directly, it is 1 byte long
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
     // ttl is too low -> DROP
     printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
     if(!is_icmp_errmsg)
-      send_icmp_msg(ZICMPM_TTL, h_ip, source_peer_ip);
+      send_icmp_msg(ZICMPM_TTL, h_ip, source_peer);
     return;
   }
 
@@ -711,16 +746,16 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
 
   // update routes
   if(routes[ip_src.s_addr].add_router(
-      source_peer_ip,
+      source_peer,
       (have_local_ip && local_ip == ip_src) ? 0 : (MAXTTL - h_ip->ip_ttl)
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
-  vector<remote_peer_t> ret;
+  vector<remote_peer_ptr_t> ret;
 
   // get route to destination
   if(iam_ep && ip_dst == local_ip) {
-    ret.emplace_back(remote_peer_t());
+    ret.emplace_back(make_shared<remote_peer_t>());
   } else if(const auto r = have_route(ip_dst.s_addr)) {
     ret.emplace_back(r->get_router());
   } else {
@@ -729,7 +764,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
   }
 
   // split horizon
-  make_rem_peer(ret)(source_peer_ip);
+  rem_peer(ret, source_peer);
 
   // assert(!iam_ep && !rem_peer(local_ip.s_addr));
 
@@ -740,7 +775,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
     send_icmp_msg((
       (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
         ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
-    ), h_ip, source_peer_ip);
+    ), h_ip, source_peer);
 
     // to prevent routing loops
     // drop routing table entry, if there is any
@@ -760,7 +795,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
         const auto target = reinterpret_cast<const struct ip*>(buffer +
                             sizeof(struct ip) + sizeof(struct icmphdr))->ip_dst;
         if(const auto r = have_route(target.s_addr)) {
-          if(r->del_router(source_peer_ip)) {
+          if(r->del_router(source_peer)) {
             // routing table entry dropped
             printf("ROUTER: delete route to %s via %s (unreachable)\n", inet_ntoa(target), source_desc_c);
           }
@@ -781,7 +816,7 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
 
         case ICMP_ECHOREPLY:
           {
-            const auto m = ping_cache.match(edat, source_peer_ip, h_ip->ip_ttl);
+            const auto m = ping_cache.match(edat, source_peer, h_ip->ip_ttl);
             if(m.match)
               if(const auto r = have_route(edat.src))
                 r->update_router(m.router, m.hops, m.diff);
@@ -819,9 +854,9 @@ static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[]
 }
 
 // handlers for incoming ZPRN packets
-typedef void (*zprn_handler_t)(const char * const, const zs_addr_t, const zprn&);
+typedef void (*zprn_handler_t)(const char * const, const remote_peer_ptr_t, const zprn&);
 
-static void zprn_routemod_handler(const char *const source_desc_c, const zs_addr_t srca, const zprn &d) {
+static void zprn_routemod_handler(const char *const source_desc_c, const remote_peer_ptr_t srca, const zprn &d) {
   const auto dsta = d.zprn_un.route.dsta;
   if(d.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
     // add route
@@ -849,7 +884,7 @@ static void zprn_routemod_handler(const char *const source_desc_c, const zs_addr
   send_zprn_msg(msg);
 }
 
-static void zprn_connmgmt_handler(const char *const source_desc_c, const zs_addr_t srca, const zprn &d) noexcept {
+static void zprn_connmgmt_handler(const char *const source_desc_c, const remote_peer_ptr_t srca, const zprn &d) noexcept {
   const auto dsta = d.zprn_un.route.dsta;
   if(d.zprn_prio == ZPRN_CONNMGMT_OPEN) {
     if(routes[dsta].add_router(srca, 1))
@@ -878,29 +913,35 @@ static void print_packet(const char buffer[], const uint16_t len) {
 /** read_packet
  * reads an variable length packet
  *
- * @param srca    (out) the source ip (router)
+ * @param srca    (in/out) the source ip (router), expects srca = local_router
  * @param buffer  (out) the target storage (with size len)
  * @param len     (in/out) the length of the packet
  * @ret           succesful marker
  **/
-static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len, string &source_desc) {
+static bool read_packet(shared_ptr<remote_peer_detail_t> &srca, char buffer[], uint16_t &len, string &source_desc) {
   static const unordered_map<uint8_t, zprn_handler_t> zprn_dpt = {
     { ZPRN_ROUTEMOD, zprn_routemod_handler },
     { ZPRN_CONNMGMT, zprn_connmgmt_handler },
   };
 
-  struct sockaddr_in source;
-  const uint16_t nread = recv_n(server_fd, buffer, len, &source);
-  srca = source.sin_addr;
+  const auto local_router = srca;
+  const uint16_t nread = recv_n(server_fd, buffer, len, &srca->saddr);
 
-  source_desc = get_remote_desc(srca.s_addr);
+  // resolve remote --> shared_ptr
+  for(const auto &i : remotes)
+    if((*i) == (*srca)) {
+      srca = i;
+      break;
+    }
+
+  source_desc = get_remote_desc(srca);
   const char * const source_desc_c = source_desc.c_str();
 
   {
     const auto &d_zprn = *reinterpret_cast<const struct zprn*>(buffer);
     if(sizeof(struct zprn) <= nread && d_zprn.valid()) {
       const auto it = zprn_dpt.find(d_zprn.zprn_cmd);
-      if(zs_likely(it != zprn_dpt.end())) it->second(source_desc_c, srca.s_addr, d_zprn);
+      if(zs_likely(it != zprn_dpt.end())) it->second(source_desc_c, srca, d_zprn);
       return false; // don't forward
     }
   }
@@ -910,7 +951,7 @@ static bool read_packet(struct in_addr &srca, char buffer[], uint16_t &len, stri
 
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
 
-  if(have_local_ip && srca == local_ip)
+  if(have_local_ip && srca == local_router)
     if(const uint16_t dsum = IN_CKSUM(h_ip)) {
       printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
         h_ip->ip_sum, dsum);
@@ -945,18 +986,21 @@ static string format_time(const time_t x) {
 static void print_routing_table(int) {
   puts("-- connected peers:");
   puts("Peer\t\tSeen\t\tConfig Entry");
-  // FIXME: we're assuming IPv4
-  for(const auto &i: remotes) {
-    const auto seen = format_time(i.second.seen);
-    printf("%s\t%s\t", inet_ntoa(reinterpret_cast<struct sockaddr_in*>(i.second.saddr)->sin_addr), seen.c_str());
-    puts(i.second.cfgent_name());
-  }
+  for(const auto &i: remotes)
+    i->locked_crun([](const remote_peer_detail_t &o) {
+      const string addr = o.addr2string();
+      const auto seen = format_time(o.seen);
+      printf("%s\t%s\t", addr.c_str(), seen.c_str());
+      puts(o.cfgent_name());
+    });
   puts("-- routing table:");
   puts("Destination\tGateway\t\tSeen\t\tLatency\tHops");
   for(const auto &i: routes) {
     const string dest = inet_ntoa({i.first});
     for(const auto &r: i.second._routers) {
-      const string gateway = inet_ntoa({r.addr}), seen = format_time(r.seen);
+      const string seen = format_time(r.seen),
+        gateway = r.addr->locked_crun(
+          [](const remote_peer_t &o) { return o.addr2string(); });
       printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
@@ -968,7 +1012,7 @@ static atomic<bool> b_do_shutdown;
 static void do_shutdown(int) noexcept
   { b_do_shutdown = true; }
 
-static void del_route_msg(const decltype(routes)::value_type &addr_v, const zs_addr_t router) {
+static void del_route_msg(const decltype(routes)::value_type &addr_v, const remote_peer_ptr_t &router) {
   // discard route message
   const auto d = get_remote_desc(router);
   printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr_v.first}), d.c_str());
@@ -1024,7 +1068,8 @@ int main(int argc, char *argv[]) {
   send_zprn_msg(msg);
 
   // add route to ourselves to avoid sending two 'ZPRN add route' packets
-  routes[local_ip.s_addr].add_router(local_ip.s_addr, 0);
+  const auto local_router = make_shared<remote_peer_detail_t>();
+  routes[local_ip.s_addr].add_router(local_router, 0);
 
   my_signal(SIGINT, do_shutdown);
   my_signal(SIGTERM, do_shutdown);
@@ -1034,7 +1079,6 @@ int main(int argc, char *argv[]) {
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
   fd_set rd_set;
   vector<bool> found_remotes(zprd_conf.remotes.size(), false);
-  unordered_map<zs_addr_t, zs_addr_t> tr_remotes;
 
   while(!b_do_shutdown) {
     /* last_time - global time, updated after select
@@ -1062,15 +1106,15 @@ int main(int argc, char *argv[]) {
         // data from tun/tap: just read it and write it to the network
         nread = cread(local_fd, buffer, BUFSIZE);
         if(is_ipv4_packet("local", buffer, nread))
-          route_packet(local_ip.s_addr, buffer, nread, "local");
+          route_packet(local_router, buffer, nread, "local");
       }
 
       if(FD_ISSET(server_fd, &rd_set)) {
         // data from the network: read it, and write it to the tun/tap interface.
-        struct in_addr addr;
+        shared_ptr<remote_peer_detail_t> addr = local_router;
         string source_desc;
         if(read_packet(addr, buffer, nread, source_desc))
-          route_packet(addr.s_addr, buffer, nread, source_desc.c_str());
+          route_packet(addr, buffer, nread, source_desc.c_str());
       }
 
       // only cleanup things if at least 1 second passed since last iteration
@@ -1078,9 +1122,13 @@ int main(int argc, char *argv[]) {
     }
 
     for(auto &i : remotes) {
-      auto &pdat = i.second;
+      auto &pdat = *i;
+
       if(pdat.cent)
         found_remotes[pdat.cent - 1] = true;
+
+      // reset marker
+      pdat.to_proceed = false;
 
       // skip remotes which aren't timed out
       if(zs_likely((last_time - zprd_conf.remote_timeout) < pdat.seen))
@@ -1088,44 +1136,27 @@ int main(int argc, char *argv[]) {
 
       if(pdat.cent) {
         // try to update ip
-        struct in_addr remote;
-        if(resolve_hostname(pdat.cfgent_name(), remote)) {
-          pdat.seen = last_time;
-          if(remote.s_addr != i.first) {
-            tr_remotes[i.first] = remote.s_addr;
-            for(auto &r: routes)
-              r.second.replace_router(i.first, remote.s_addr);
-          }
+        struct sockaddr_storage remote;
+        if(resolve_hostname(pdat.cfgent_name(), remote, zprd_conf.preferred_af)) {
+          pdat.locked_run([&remote](remote_peer_detail_t &o) {
+            o.seen = last_time;
+            o.set_saddr(remote, false);
+          });
           continue;
         }
       }
 
       for(auto &r: routes)
-        if(r.second.del_router(i.first))
-          del_route_msg(r, i.first);
+        if(r.second.del_router(i))
+          del_route_msg(r, i);
 
       pdat.to_discard = true;
     }
 
-    // replace remotes (after cleanup -> lesser remotes to process)
-    remotes.reserve(remotes.size() + tr_remotes.size());
-    for(auto &i : tr_remotes) {
-# ifdef HAVE_MAP_EXTRACT
-      auto nh = remotes.extract(i.first);
-      nh.key() = i.second;
-      remotes.insert(std::move(nh));
-# else
-      auto &rfr = remotes[i.first];
-      remotes[i.second] = std::move(rfr);
-      rfr.to_discard = true;
-# endif
-    }
-    tr_remotes.clear();
-
     // cleanup routes, needs to be done after del_router calls
     for(auto it = routes.begin(); it != routes.end();) {
       auto &ise = it->second;
-      ise.cleanup([=](const zs_addr_t router)
+      ise.cleanup([=](const remote_peer_ptr_t &router)
         { del_route_msg(*it, router); });
 
       const bool iee = ise.empty();
@@ -1145,10 +1176,33 @@ int main(int argc, char *argv[]) {
 
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
     for(auto it = remotes.cbegin(); it != remotes.cend();) {
-      if(it->second.to_discard)
-        it = remotes.erase(it);
-      else
-        ++it;
+      auto &spdat = *it;
+      auto &pdat = *spdat;
+      if(pdat.to_discard)
+        goto do_discard;
+      // marker
+      pdat.to_proceed = true;
+      // check for duplicates
+      for(auto kt = remotes.cbegin(); kt != remotes.cend();) {
+        auto &odat = **kt;
+        if(odat.to_discard || pdat.to_proceed || pdat != odat)
+          continue;
+        // we found a duplicate
+        // delete the one which has a corresponding config entry or a lower use count
+        ((!pdat.cent && odat.cent) || (spdat.use_count() < kt->use_count()) ? &pdat : &odat)
+          ->to_discard = true;
+      }
+      if(pdat.to_discard)
+        goto do_discard;
+      ++it;
+      continue;
+
+     do_discard:
+      for(auto &r: routes)
+        if(r.second.del_router(spdat))
+          del_route_msg(r, spdat);
+
+      it = remotes.erase(it);
     }
 
     size_t i = 0;
@@ -1157,10 +1211,12 @@ int main(int argc, char *argv[]) {
         fri = false;
       } else {
         // remote from config wasn't found in 'remotes' map
-        struct in_addr remote;
-        if(resolve_hostname(zprd_conf.remotes[i].c_str(), remote)) {
-          remotes[last_remote_id++] = remote_peer_detail_t(remote_peer_t(remote), i);
-          printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
+        struct sockaddr_storage remote;
+        if(resolve_hostname(zprd_conf.remotes[i].c_str(), remote, zprd_conf.preferred_af)) {
+          auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), i);
+          const string remote_desc = ptr->addr2string();
+          remotes.emplace_back(move(ptr));
+          printf("CLIENT: connected to server %s\n", remote_desc.c_str());
         }
       }
       ++i;
