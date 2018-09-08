@@ -47,7 +47,7 @@ auto remote_peer_t::addr2string() const -> string {
     case AF_INET:
 #ifdef USE_IPV6
     case AF_INET6:
-      sanport = (saddr.sa_family == AF_INET) ? SA_XXX_PTR(in, port) : SA_XXX_PTR(in6, port)
+      sanport = (saddr.ss_family == AF_INET) ? SA_XXX_PTR(in, port) : SA_XXX_PTR(in6, port)
 #else
       sanport = SA_XXX_PTR(in, port)
 #endif
@@ -103,6 +103,30 @@ void remote_peer_t::set_saddr(const sockaddr_storage &sas, const bool do_lock) n
   }
 }
 
+#define SA_XXX_PTR(PROTO,WHAT) (&reinterpret_cast<struct sockaddr_##PROTO*>(&saddr)->s##PROTO##_##WHAT)
+
+// used by src/main.cxx:setup_server_fd
+bool remote_peer_t::set2catchall() noexcept {
+  switch(saddr.ss_family) {
+    case AF_INET:
+      SA_XXX_PTR(in, addr)->s_addr = htonl(INADDR_ANY);
+      break;
+#ifdef USE_IPV6
+    case AF_INET6:
+      *SA_XXX_PTR(in6, addr) = in6addr_any;
+      break;
+#endif
+/*    FIXME
+    case AF_IPX:
+      SA_XXX_PTR(ipx, addr) = ...IDK...;
+      break;
+ */
+    default:
+      break;
+  }
+  return true;
+}
+
 void remote_peer_t::set_port(const uint16_t port, const bool do_lock) noexcept {
   if(do_lock) {
     std::unique_lock<_mtx_t> lock(_mtx);
@@ -110,7 +134,6 @@ void remote_peer_t::set_port(const uint16_t port, const bool do_lock) noexcept {
     set_port(port, false);
     return;
   }
-#define SA_XXX_PTR(PROTO,WHAT) (&reinterpret_cast<struct sockaddr_##PROTO*>(&saddr)->s##PROTO##_##WHAT)
   uint16_t *portptr = 0;
   switch(saddr.ss_family) {
     case AF_INET:
@@ -131,5 +154,6 @@ void remote_peer_t::set_port(const uint16_t port, const bool do_lock) noexcept {
   }
   if(portptr)
     *portptr = htons(port);
-#undef SA_XXX_PTR
 }
+
+#undef SA_XXX_PTR

@@ -34,6 +34,9 @@ class remote_peer_t : public std::enable_shared_from_this<remote_peer_t> {
   // generic access methods, locked
   auto get_saddr() const noexcept -> sockaddr_storage;
   void set_saddr(const sockaddr_storage &sas, bool do_lock = true) noexcept;
+  // set2catchall sets saddr (unlocked) to the use-all-interfaces-catchall address
+  //  used by main.cxx:setup_server_fd
+  bool set2catchall() noexcept;
   void set_port(uint16_t port, bool do_lock = true) noexcept;
 
   // NOTE: eventually, check if try{ shared_from_this()->unique() } catch { true },
