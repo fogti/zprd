@@ -44,6 +44,8 @@ auto remote_peer_t::addr2string() const -> string {
   const uint16_t *sanport = 0;
 
   switch(saddr.ss_family) {
+    case AF_UNSPEC:
+      return "localhost";
     case AF_INET:
 #ifdef USE_IPV6
     case AF_INET6:
