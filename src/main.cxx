@@ -162,6 +162,31 @@ static sa_family_t str2preferred_af(string afdesc) {
   return AF_UNSPEC;
 }
 
+static void connect2server(const string &r, const size_t cent) {
+  struct sockaddr_storage remote;
+  if(resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af)) {
+    auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
+    const string remote_desc = ptr->addr2string();
+    ptr->set_port(zprd_conf.data_port, false);
+    remotes.emplace_back(move(ptr));
+    printf("CLIENT: connected to server %s\n", remote_desc.c_str());
+  }
+}
+
+static bool update_server_addr(remote_peer_detail_t &pdat) {
+  struct sockaddr_storage remote;
+  // try to update ip
+  if(pdat.cent && resolve_hostname(pdat.cfgent_name(), remote, zprd_conf.preferred_af)) {
+    pdat.locked_run([&remote](remote_peer_detail_t &o) {
+      o.seen = last_time;
+      o.set_saddr(remote, false);
+      o.set_port(zprd_conf.data_port, false);
+    });
+    return true;
+  }
+  return false;
+}
+
 static bool init_all(const string &confpath) {
   static const auto runcmd_fn = [](const string &cmd) -> bool {
     if(const int ret = system(cmd.c_str())) {
@@ -350,15 +375,9 @@ static bool init_all(const string &confpath) {
 
   {
     size_t i = 0;
-    struct sockaddr_storage remote;
     remotes.reserve(zprd_conf.remotes.size());
     for(const auto &r : zprd_conf.remotes) {
-      if(resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af)) {
-        auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), i);
-        const string remote_desc = ptr->addr2string();
-        remotes.emplace_back(move(ptr));
-        printf("CLIENT: connected to server %s\n", remote_desc.c_str());
-      }
+      connect2server(r, i);
       ++i;
     }
   }
@@ -381,10 +400,17 @@ static bool init_all(const string &confpath) {
     return false;
   }
 
-  remote_peer_t local(htonl(INADDR_ANY));
-  if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&local.saddr), sizeof(local.saddr)) < 0) {
-    perror("bind()");
-    return false;
+  // FIXME: create multiple server_fd's and store them in a hashmap AF_ -> fd
+  {
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    sa.sin_port = zprd_conf.data_port;
+    if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) < 0) {
+      perror("bind()");
+      return false;
+    }
   }
 
   sender.start();
@@ -1134,17 +1160,9 @@ int main(int argc, char *argv[]) {
       if(zs_likely((last_time - zprd_conf.remote_timeout) < pdat.seen))
         continue;
 
-      if(pdat.cent) {
-        // try to update ip
-        struct sockaddr_storage remote;
-        if(resolve_hostname(pdat.cfgent_name(), remote, zprd_conf.preferred_af)) {
-          pdat.locked_run([&remote](remote_peer_detail_t &o) {
-            o.seen = last_time;
-            o.set_saddr(remote, false);
-          });
-          continue;
-        }
-      }
+      // try to update ip
+      if(update_server_addr(pdat))
+        continue;
 
       for(auto &r: routes)
         if(r.second.del_router(i))
@@ -1211,13 +1229,7 @@ int main(int argc, char *argv[]) {
         fri = false;
       } else {
         // remote from config wasn't found in 'remotes' map
-        struct sockaddr_storage remote;
-        if(resolve_hostname(zprd_conf.remotes[i].c_str(), remote, zprd_conf.preferred_af)) {
-          auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), i);
-          const string remote_desc = ptr->addr2string();
-          remotes.emplace_back(move(ptr));
-          printf("CLIENT: connected to server %s\n", remote_desc.c_str());
-        }
+        connect2server(zprd_conf.remotes[i], i);
       }
       ++i;
     }
