@@ -80,7 +80,7 @@ time_t last_time;
 
 struct send_data final {
   vector<char> buffer;
-  vector<zs_addr_t> dests;
+  vector<remote_peer_t> dests;
   uint16_t frag;
   uint8_t  tos;
 
@@ -92,7 +92,7 @@ struct send_data final {
     : buffer(move(o.buffer)), dests(move(o.dests)),
       frag(o.frag), tos(o.tos) { }
 
-  send_data(vector<char> &&buf, vector<zs_addr_t> &&d,
+  send_data(vector<char> &&buf, vector<remote_peer_t> &&d,
             const uint16_t frag_ = 0, const uint8_t tos_ = 0) noexcept
     : buffer(move(buf)), dests(move(d)), frag(frag_), tos(tos_) { }
 
@@ -135,7 +135,8 @@ class sender_t final {
  **/
 static int local_fd, server_fd;
 
-static unordered_map<zs_addr_t, remote_peer_t> remotes;
+static size_t last_remote_id = 0;
+static unordered_map<size_t,    remote_peer_detail_t> remotes;
 static unordered_map<zs_addr_t, route_via_t> routes;
 
 static sender_t     sender;
@@ -145,6 +146,15 @@ static in_addr local_ip, local_netmask;
 static bool have_local_ip;
 
 /*** helper functions ***/
+
+static bool resolve_remote_peer(const remote_peer_t &peer, size_t &result) noexcept {
+  for(const auto &i : remotes)
+    if(i.second == peer) {
+      result = i.first;
+      return true;
+    }
+  return false;
+}
 
 static bool init_all(const string &confpath) {
   static const auto runcmd_fn = [](const string &cmd) -> bool {
@@ -183,7 +193,7 @@ static bool init_all(const string &confpath) {
 
     // DEFAULTS
     zprd_conf.data_port      = 45940; // P45940
-    zprd_conf.remote_timeout = 600;   // T600   = 10 min
+    zprd_conf.remote_timeout = 600;          // T600   = 10 min
     local_ip.s_addr          = htonl(0);
     have_local_ip            = false;
 
@@ -233,6 +243,8 @@ static bool init_all(const string &confpath) {
       fprintf(stderr, "CONFIG ERROR: no interface specified\n");
       return false;
     }
+
+    zprd_conf.data_port = htons(zprd_conf.data_port); // convert port to big-endian
 
     if(!addr_stmt.empty()) {
       const size_t marker = addr_stmt.find('/');
@@ -329,11 +341,12 @@ static bool init_all(const string &confpath) {
     struct in_addr remote;
     for(const auto &r : zprd_conf.remotes) {
       if(resolve_hostname(r.c_str(), remote)) {
-        remotes[remote.s_addr] = {i};
+        remotes[i] = remote_peer_detail_t(remote_peer_t(remote), i);
         printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
       }
       ++i;
     }
+    last_remote_id = i;
   }
 
   if(remotes.empty() && !zprd_conf.remotes.empty()) {
@@ -354,12 +367,8 @@ static bool init_all(const string &confpath) {
     return false;
   }
 
-  struct sockaddr_in local;
-  memset(&local, 0, sizeof(local));
-  local.sin_family = AF_INET;
-  local.sin_addr.s_addr = htonl(INADDR_ANY);
-  local.sin_port = htons(zprd_conf.data_port);
-  if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&local), sizeof(local)) < 0) {
+  remote_peer_t local(htonl(INADDR_ANY));
+  if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&local.saddr), sizeof(local.saddr)) < 0) {
     perror("bind()");
     return false;
   }
@@ -428,10 +437,6 @@ void sender_t::worker_fn() noexcept {
   set_tos(0);
 
   vector<send_data> tasks;
-  struct sockaddr_in dsta;
-  memset(&dsta, 0, sizeof(dsta));
-  dsta.sin_family = AF_INET;
-  dsta.sin_port   = htons(zprd_conf.data_port);
 
   while(true) {
     {
@@ -450,7 +455,7 @@ void sender_t::worker_fn() noexcept {
 
       // send data
       // NOTE: it is impossible that local_ip and others are destinations together
-      if(dat.dests.front() == local_ip.s_addr) {
+      if(dat.dests.front() == remote_peer_t()) {
         { // update checksum if ipv4
           const auto h_ip = reinterpret_cast<struct ip*>(buf);
           if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
@@ -471,13 +476,11 @@ void sender_t::worker_fn() noexcept {
       // setup outer TOS
       if(tos != dat.tos) set_tos(dat.tos);
 
-      for(const auto &i : dat.dests) {
-        dsta.sin_addr.s_addr = i;
-        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<struct sockaddr *>(&dsta), sizeof(dsta)) < 0) {
+      for(const auto &i : dat.dests)
+        if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&i.saddr), sizeof(i.saddr)) < 0) {
           got_error = true;
           perror("sendto()");
         }
-      }
     }
 
     if(got_error) fflush(stderr);
@@ -515,7 +518,7 @@ enum zprd_icmpe {
 
 static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const zs_addr_t source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
-  send_data dat{vector<char>(buflen, 0), {source_ip}};
+  send_data dat{vector<char>(buflen, 0), {remote_peer_t(source_ip)}};
   char *const buffer = dat.buffer.data();
 
   const auto h_ip = reinterpret_cast<struct ip*>(buffer);
@@ -587,9 +590,9 @@ static string get_remote_desc(const zs_addr_t addr) {
  * generate a sorted vector from the keys of remotes map
  **/
 static auto get_peers() {
-  vector<zs_addr_t> ret;
+  vector<remote_peer_t> ret;
   ret.reserve(remotes.size());
-  for(const auto &i : remotes) ret.emplace_back(i.first);
+  for(const auto &i : remotes) ret.emplace_back(i.second.saddr);
 
   /* sort all elems in 'ret' */
 #ifdef TBB_FOUND
@@ -603,7 +606,7 @@ static auto get_peers() {
 }
 
 static void send_zprn_msg(const zprn &msg) {
-  vector<zs_addr_t> peers = get_peers();
+  auto peers = get_peers();
 
   // split horizon
   if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
@@ -632,8 +635,10 @@ static void send_zprn_msg(const zprn &msg) {
  **/
 [[gnu::hot]]
 static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
+  const size_t source_peer_id = resolve_remote_peer(remote_peer_t(source_peer_ip));
+
   if(!have_local_ip || source_peer_ip != local_ip.s_addr)
-    remotes[source_peer_ip].seen = last_time;
+    remotes[source_peer_id].seen = last_time;
 
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
@@ -711,11 +716,11 @@ static void route_packet(const zs_addr_t source_peer_ip, char *const __restrict_
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
-  vector<zs_addr_t> ret;
+  vector<remote_peer_t> ret;
 
   // get route to destination
   if(iam_ep && ip_dst == local_ip) {
-    ret.emplace_back(local_ip.s_addr);
+    ret.emplace_back(remote_peer_t());
   } else if(const auto r = have_route(ip_dst.s_addr)) {
     ret.emplace_back(r->get_router());
   } else {
@@ -940,9 +945,10 @@ static string format_time(const time_t x) {
 static void print_routing_table(int) {
   puts("-- connected peers:");
   puts("Peer\t\tSeen\t\tConfig Entry");
+  // FIXME: we're assuming IPv4
   for(const auto &i: remotes) {
     const auto seen = format_time(i.second.seen);
-    printf("%s\t%s\t", inet_ntoa({i.first}), seen.c_str());
+    printf("%s\t%s\t", inet_ntoa(reinterpret_cast<struct sockaddr_in*>(i.second.saddr)->sin_addr), seen.c_str());
     puts(i.second.cfgent_name());
   }
   puts("-- routing table:");
@@ -1153,7 +1159,7 @@ int main(int argc, char *argv[]) {
         // remote from config wasn't found in 'remotes' map
         struct in_addr remote;
         if(resolve_hostname(zprd_conf.remotes[i].c_str(), remote)) {
-          remotes[remote.s_addr] = {i};
+          remotes[last_remote_id++] = remote_peer_detail_t(remote_peer_t(remote), i);
           printf("CLIENT: connected to server %s\n", inet_ntoa(remote));
         }
       }

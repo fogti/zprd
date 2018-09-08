@@ -7,7 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(USE_TBB "use the Intel Threading Building Blocks library" ON)
-option(USE_ABI_32 "build 32bit executable" ON)
+option(USE_IPV6 "enable outer IPv6 support" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
@@ -44,7 +44,8 @@ set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -fno-plt -ftree-vectorize -fno-unwind-ta
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-plt -ftree-vectorize -fno-rtti -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables")
 
 add_executable(zprd src/main.cxx src/cksum.c src/crw.c src/ping_cache.cxx
-                    src/remote_peer.cxx src/resolve.cxx src/routes.cxx src/zprn.cxx)
+                    src/remote_peer.cxx src/remote_peer_detail.cxx
+                    src/resolve.cxx src/routes.cxx src/zprn.cxx)
 target_link_libraries(zprd Threads::Threads LowlevelZS::lowlevelzs)
 
 if(${TBB_FOUND})
