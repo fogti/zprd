@@ -10,10 +10,10 @@
 extern time_t last_time;
 
 remote_peer_detail_t::remote_peer_detail_t() noexcept
-  : seen(last_time), cent(0), to_discard(false), to_proceed(false) { }
+  : seen(last_time), cent(0), to_discard(false) { }
 
 remote_peer_detail_t::remote_peer_detail_t(const sockaddr_storage &sas) noexcept
-  : remote_peer_t(sas), seen(last_time), cent(0), to_discard(false), to_proceed(false) { }
+  : remote_peer_t(sas), seen(last_time), cent(0), to_discard(false) { }
 
 remote_peer_detail_t::remote_peer_detail_t(const remote_peer_t &o) noexcept
   : remote_peer_detail_t(o.get_saddr()) { }

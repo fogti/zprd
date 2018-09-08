@@ -32,7 +32,7 @@
 #include <netinet/ip_icmp.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/select.h>
+#include <sys/epoll.h> // linux-specific epoll
 #include <sys/prctl.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -133,9 +133,10 @@ class sender_t final {
 /** file descriptors
  *
  * local_fd  = the tun device
- * server_fd = the server udp socket
+ * server_fd = the server udp sockets
  **/
-static int local_fd, server_fd;
+static int local_fd;
+static unordered_map<sa_family_t, int> server_fds;
 
 static vector<shared_ptr<remote_peer_detail_t>> remotes;
 static unordered_map<zs_addr_t, route_via_t> routes;
@@ -162,12 +163,54 @@ static sa_family_t str2preferred_af(string afdesc) {
   return AF_UNSPEC;
 }
 
+static bool setup_server_fd(const sa_family_t sa_family) {
+  // prepare server
+
+  // declare all variables here, to allow 'goto error'
+  const int server_fd = socket(sa_family, SOCK_DGRAM, 0);
+  int optval = 1;
+  remote_peer_t local_pt;
+  struct sockaddr_storage &ss = local_pt.saddr;
+
+  if(server_fd < 0) {
+    perror("socket()");
+    goto error;
+  }
+
+  // avoid EADDRINUSE error on bind()
+  if(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
+    perror("setsockopt()");
+    goto error;
+  }
+
+  // FIXME: create multiple server_fd's and store them in a hashmap AF_ -> fd
+  // use remote_peer_t as abstraction layer + helper
+  ss.ss_family = sa_family;
+  local_pt.set_port(zprd_conf.data_port, false);
+  if(!local_pt.set2catchall()) {
+    fprintf(stderr, "STARTUP ERROR: setup_server_fd: unsupported address family %u\n", static_cast<unsigned>(sa_family));
+    goto error;
+  }
+
+  if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&ss), sizeof(ss)) < 0) {
+    perror("bind()");
+    return false;
+  }
+
+  server_fds[sa_family] = server_fd;
+  return true;
+
+ error:
+  close(server_fd);
+  return false;
+}
+
 static void connect2server(const string &r, const size_t cent) {
   struct sockaddr_storage remote;
   if(resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af)) {
     auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
-    const string remote_desc = ptr->addr2string();
     ptr->set_port(zprd_conf.data_port, false);
+    const string remote_desc = ptr->addr2string();
     remotes.emplace_back(move(ptr));
     printf("CLIENT: connected to server %s\n", remote_desc.c_str());
   }
@@ -277,7 +320,7 @@ static bool init_all(const string &confpath) {
       return false;
     }
 
-    zprd_conf.data_port = htons(zprd_conf.data_port); // convert port to big-endian
+    // NOTE: don't convert zprd_conf.data_port to big-endian; that's done in remote_peer_t::set_port
 
     if(!addr_stmt.empty()) {
       const size_t marker = addr_stmt.find('/');
@@ -388,30 +431,13 @@ static bool init_all(const string &confpath) {
   }
 
   // prepare server
-  if( (server_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-    perror("socket()");
+  if(!setup_server_fd(AF_INET))
     return false;
-  }
 
-  // avoid EADDRINUSE error on bind()
-  int optval = 1;
-  if(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
-    perror("setsockopt()");
+#ifdef USE_IPV6
+  if(!setup_server_fd(AF_INET6))
     return false;
-  }
-
-  // FIXME: create multiple server_fd's and store them in a hashmap AF_ -> fd
-  {
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
-    sa.sin_port = zprd_conf.data_port;
-    if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) < 0) {
-      perror("bind()");
-      return false;
-    }
-  }
+#endif
 
   sender.start();
   return true;
@@ -449,11 +475,11 @@ void sender_t::worker_fn() noexcept {
     const int tmp_df = cdf
 # if defined(IP_DONTFRAG)
       ;
-    if(setsockopt(server_fd, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
+    if(setsockopt(server_fds[AF_INET], IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
 # elif defined(IP_MTU_DISCOVER)
       ? IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
-    if(setsockopt(server_fd, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
+    if(setsockopt(server_fds[AF_INET], IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
       perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
 # else
 #  warning "set_ip_df: no method available to manage the dont-frag bit"
@@ -464,7 +490,7 @@ void sender_t::worker_fn() noexcept {
   };
 
   const auto set_tos = [&tos](const uint8_t ctos) noexcept {
-    if(setsockopt(server_fd, IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
+    if(setsockopt(server_fds[AF_INET], IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
       perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
     else tos = ctos;
   };
@@ -504,6 +530,13 @@ void sender_t::worker_fn() noexcept {
         continue;
       }
 
+      // detect if we need to set the df and tos bits
+      for(const auto &i : dat.dests)
+        if(i->get_saddr().ss_family == AF_INET)
+          goto cont_ipv4hs;
+      goto cont_nohs;
+
+     cont_ipv4hs:
       { // setup outer Dont-Frag bit
         const bool cdf = dat.frag & htons(IP_DF);
         if(df != cdf) set_df(cdf);
@@ -512,10 +545,11 @@ void sender_t::worker_fn() noexcept {
       // setup outer TOS
       if(tos != dat.tos) set_tos(dat.tos);
 
+     cont_nohs:
       // TODO: use the correct server_fd depending on ss_family / AF_*
       for(const auto &i : dat.dests) {
         i->locked_crun([&](const remote_peer_t &o) noexcept {
-          if(sendto(server_fd, buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
+          if(sendto(server_fds[o.saddr.ss_family], buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
             got_error = true;
             perror("sendto()");
           }
@@ -944,13 +978,15 @@ static void print_packet(const char buffer[], const uint16_t len) {
  * @param len     (in/out) the length of the packet
  * @ret           succesful marker
  **/
-static bool read_packet(shared_ptr<remote_peer_detail_t> &srca, char buffer[], uint16_t &len, string &source_desc) {
+static bool read_packet(const int server_fd, shared_ptr<remote_peer_detail_t> &srca, char buffer[], uint16_t &len, string &source_desc) {
   static const unordered_map<uint8_t, zprn_handler_t> zprn_dpt = {
     { ZPRN_ROUTEMOD, zprn_routemod_handler },
     { ZPRN_CONNMGMT, zprn_connmgmt_handler },
   };
 
   const auto local_router = srca;
+  // create new shared_ptr, so that we don't overwrite local_router
+  srca = make_shared<remote_peer_detail_t>();
   const uint16_t nread = recv_n(server_fd, buffer, len, &srca->saddr);
 
   // resolve remote --> shared_ptr
@@ -1044,6 +1080,18 @@ static void del_route_msg(const decltype(routes)::value_type &addr_v, const remo
   printf("ROUTER: delete route to %s via %s (outdated)\n", inet_ntoa({addr_v.first}), d.c_str());
 }
 
+static bool do_epoll_add(const int epoll_fd, const int fd_to_add) {
+  struct epoll_event epevent;
+  epevent.events = EPOLLIN;
+  epevent.data.fd = fd_to_add;
+  if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd_to_add, &epevent)) {
+    fprintf(stderr, "STARTUP ERROR: epoll_ctl(%d, ADD, %d,) failed\n", epoll_fd, fd_to_add);
+    close(epoll_fd);
+    return false;
+  }
+  return true;
+}
+
 int main(int argc, char *argv[]) {
   { // parse command line
     string confpath = "/etc/zprd.conf";
@@ -1061,7 +1109,7 @@ int main(int argc, char *argv[]) {
         const auto lfp = cur.substr(1);
         const int ofd = open(lfp.c_str(), O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
         if(ofd < 0) {
-          fprintf(stderr, "ERROR: unable to open logfile '%s'\n", lfp.c_str());
+          fprintf(stderr, "STARTUP ERROR: unable to open logfile '%s'\n", lfp.c_str());
           perror("open()");
           return 1;
         }
@@ -1086,6 +1134,21 @@ int main(int argc, char *argv[]) {
   fflush(stdout);
   fflush(stderr);
 
+  // add all local + server file descriptors to epoll
+  const int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+
+  if(epoll_fd == -1) {
+    fprintf(stderr, "STARTUP ERROR: epoll_create1() failed\n");
+    return 1;
+  }
+
+  if(!do_epoll_add(epoll_fd, local_fd))
+    return 1;
+
+  for(const auto &i : server_fds)
+    if(!do_epoll_add(epoll_fd, i.second))
+      return 1;
+
   // notify our peers that we are here
   zprn msg;
   msg.zprn_cmd = ZPRN_CONNMGMT;
@@ -1100,11 +1163,12 @@ int main(int argc, char *argv[]) {
   my_signal(SIGINT, do_shutdown);
   my_signal(SIGTERM, do_shutdown);
 
-  int retcode = 0;
+  int retcode = 0, epevcnt;
 
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
-  fd_set rd_set;
   vector<bool> found_remotes(zprd_conf.remotes.size(), false);
+#define MAX_EVENTS 32
+  struct epoll_event epevents[MAX_EVENTS];
 
   while(!b_do_shutdown) {
     /* last_time - global time, updated after select
@@ -1112,38 +1176,39 @@ int main(int argc, char *argv[]) {
       */
     { // use select() to handle two descriptors at once
       const auto pastt = last_time;
-      FD_ZERO(&rd_set);
-      FD_SET(local_fd, &rd_set);
-      FD_SET(server_fd, &rd_set);
 
-      if(select(std::max(local_fd, server_fd) + 1, &rd_set, nullptr, nullptr, nullptr) < 0) {
+      epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, -1);
+
+      if(epevcnt == -1) {
         if(errno == EINTR) continue;
-        perror("select()");
+        perror("epoll_wait()");
         retcode = 1;
         break;
       }
 
-      last_time = time(nullptr);
-
       uint16_t nread = BUFSIZE;
       char buffer[BUFSIZE];
+      shared_ptr<remote_peer_detail_t> peer_ptr;
+      string source_desc;
 
-      if(FD_ISSET(local_fd, &rd_set)) {
-        // data from tun/tap: just read it and write it to the network
-        nread = cread(local_fd, buffer, BUFSIZE);
-        if(is_ipv4_packet("local", buffer, nread))
-          route_packet(local_router, buffer, nread, "local");
-      }
-
-      if(FD_ISSET(server_fd, &rd_set)) {
-        // data from the network: read it, and write it to the tun/tap interface.
-        shared_ptr<remote_peer_detail_t> addr = local_router;
-        string source_desc;
-        if(read_packet(addr, buffer, nread, source_desc))
-          route_packet(addr, buffer, nread, source_desc.c_str());
+      for(int i = 0; i < epevcnt; ++i) {
+        const int cur_fd = epevents[i].data.fd;
+        if(!(epevents[i].events & EPOLLIN)) continue;
+        if(cur_fd == local_fd) {
+          // data from tun/tap: just read it and write it to the network
+          nread = cread(local_fd, buffer, BUFSIZE);
+          if(is_ipv4_packet("local", buffer, nread))
+            route_packet(local_router, buffer, nread, "local");
+        } else {
+          // data from the network: read it, and write it to the tun/tap interface.
+          peer_ptr = local_router;
+          if(read_packet(cur_fd, peer_ptr, buffer, nread, source_desc))
+            route_packet(peer_ptr, buffer, nread, source_desc.c_str());
+        }
       }
 
       // only cleanup things if at least 1 second passed since last iteration
+      last_time = time(nullptr);
       if(last_time == pastt) continue;
     }
 
@@ -1152,9 +1217,6 @@ int main(int argc, char *argv[]) {
 
       if(pdat.cent)
         found_remotes[pdat.cent - 1] = true;
-
-      // reset marker
-      pdat.to_proceed = false;
 
       // skip remotes which aren't timed out
       if(zs_likely((last_time - zprd_conf.remote_timeout) < pdat.seen))
@@ -1198,17 +1260,16 @@ int main(int argc, char *argv[]) {
       auto &pdat = *spdat;
       if(pdat.to_discard)
         goto do_discard;
-      // marker
-      pdat.to_proceed = true;
       // check for duplicates
-      for(auto kt = remotes.cbegin(); kt != remotes.cend();) {
+      for(auto kt = it + 1; kt != remotes.cend();) {
         auto &odat = **kt;
-        if(odat.to_discard || pdat.to_proceed || pdat != odat)
-          continue;
-        // we found a duplicate
-        // delete the one which has a corresponding config entry or a lower use count
-        ((!pdat.cent && odat.cent) || (spdat.use_count() < kt->use_count()) ? &pdat : &odat)
-          ->to_discard = true;
+        if(!odat.to_discard && pdat == odat) {
+          // we found a duplicate
+          // delete the one which has a corresponding config entry or a lower use count
+          ((!pdat.cent && odat.cent) || (spdat.use_count() < kt->use_count()) ? &pdat : &odat)
+            ->to_discard = true;
+        }
+        ++kt;
       }
       if(pdat.to_discard)
         goto do_discard;
@@ -1238,6 +1299,8 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
     fflush(stderr);
   }
+
+  close(epoll_fd);
 
   // notify our peers that we quit
   puts("ROUTER: disconnect from peers");

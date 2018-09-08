@@ -4,6 +4,7 @@
  */
 #pragma once
 #cmakedefine TBB_FOUND
+#cmakedefine USE_IPV6
 #cmakedefine HAVE_BUILTIN_EXPECT
 #cmakedefine HAVE_ATTRIB_PURE
 #cmakedefine HAVE_MAP_EXTRACT

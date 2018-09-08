@@ -37,7 +37,7 @@ void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &
 auto route_via_t::find_router(const remote_peer_ptr_t &router) noexcept -> decltype(_routers)::iterator {
   return find_if(_routers.begin(), _routers.end(),
     [router](const via_router_t &i) noexcept
-      { return i.addr == router; }
+      { return i.addr == router || (*i.addr) == (*router); }
   );
 }
 
