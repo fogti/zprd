@@ -459,12 +459,16 @@ static string get_remote_desc(const remote_peer_ptr_t &addr) {
   });
 }
 
+static bool x_less(const remote_peer_ptr_t &a, const remote_peer_ptr_t &b) {
+  return (*a) < (*b);
+}
+
 template<typename T, typename Fn>
 static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
   // perform a binary find
   const auto it = lower_bound(vec.cbegin(), vec.cend(), item, fn);
   if(it == vec.cend() || (*it != item && **it != *item))
-   return false;
+    return false;
   // erase element
   // NOTE: don't swap [back] with [*it], as that destructs sorted range
   vec.erase(it);
@@ -472,19 +476,20 @@ static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
 }
 
 static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
-  typedef remote_peer_ptr_t ptr_t;
+  // NOTE: DEBUG is going on
+  if(xg_rem_peer(vec, item, x_less)) {
+    const string peerdesc = get_remote_desc(item);
+    printf("DEBUG: rem_peer %s found\n", peerdesc.c_str());
+    return true;
+  }
 
-  if(xg_rem_peer(vec, item, less<ptr_t>())) goto found;
-  if(xg_rem_peer(vec, item,
-    [](const ptr_t &a, const ptr_t &b) { return (*a) < (*b); }
-  )) goto found;
-
+  if(vec.size() == 1 && *vec.front() == *item) {
+    printf("FATAL ERROR in rem_peer: xg_rem_peer doesn't work.");
+    const string peerdesc = get_remote_desc(item);
+    printf("ERROR DEBUG: rem_peer %s found\n", peerdesc.c_str());
+    return true;
+  }
   return false;
-
-  found: // DEBUG
-  const string peerdesc = get_remote_desc(item);
-  printf("DEBUG: rem_peer %s found\n", peerdesc.c_str());
-  return true;
 }
 
 void sender_t::worker_fn() noexcept {
@@ -696,7 +701,7 @@ static auto get_peers() {
 #else
   std::sort
 #endif
-    (ret.begin(), ret.end());
+    (ret.begin(), ret.end(), x_less);
 
   return ret;
 }
