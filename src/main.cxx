@@ -463,7 +463,7 @@ template<typename T, typename Fn>
 static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
   // perform a binary find
   const auto it = lower_bound(vec.cbegin(), vec.cend(), item, fn);
-  if(it == vec.cend() || *it != item)
+  if(it == vec.cend() || (*it != item && **it != *item))
    return false;
   // erase element
   // NOTE: don't swap [back] with [*it], as that destructs sorted range
@@ -474,10 +474,10 @@ static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
 static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
   typedef remote_peer_ptr_t ptr_t;
 
-  if(xg_rem_peer(vec, item, less<ptr_t>())) return true;
+  if(xg_rem_peer(vec, item, less<ptr_t>())) goto found;
   if(xg_rem_peer(vec, item,
     [](const ptr_t &a, const ptr_t &b) { return (*a) < (*b); }
-  )) return true;
+  )) goto found;
 
   return false;
 
