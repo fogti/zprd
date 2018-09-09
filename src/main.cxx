@@ -483,13 +483,30 @@ static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &it
     return true;
   }
 
+  // DEBUG: naive impl
+  vector<remote_peer_ptr_t>::const_iterator xfit = vec.cend();
   if(vec.size() == 1 && *vec.front() == *item) {
-    printf("FATAL ERROR in rem_peer: xg_rem_peer doesn't work.");
-    const string peerdesc = get_remote_desc(item);
-    printf("ERROR DEBUG: rem_peer %s found\n", peerdesc.c_str());
-    return true;
+    xfit = vec.begin();
+    goto naive_found;
   }
+
+  for(xfit = vec.begin(); xfit != vec.end(); ++xfit) {
+    if(**xfit == *item)
+      goto naive_found;
+    if((*xfit)->addr2string() == item->addr2string()) {
+      printf("rem_peer NAIVE FOUND via string compare\n");
+      goto naive_found;
+    }
+  }
+
   return false;
+
+ naive_found:
+  printf("FATAL ERROR in rem_peer: xg_rem_peer doesn't work.\n");
+  const string peerdesc = get_remote_desc(item);
+  printf("ERROR DEBUG: rem_peer %s found\n", peerdesc.c_str());
+  if(xfit != vec.end()) vec.erase(xfit);
+  return true;
 }
 
 void sender_t::worker_fn() noexcept {
@@ -710,6 +727,7 @@ static void send_zprn_msg(const zprn &msg) {
   auto peers = get_peers();
 
   // split horizon
+  // FIXME: is currently broken
   if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
     if(const auto r = have_route(msg.zprn_un.route.dsta))
       rem_peer(peers, r->get_router());
