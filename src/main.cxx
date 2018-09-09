@@ -985,6 +985,8 @@ static bool read_packet(const int server_fd, shared_ptr<remote_peer_detail_t> &s
   };
 
   const auto local_router = srca;
+  // create new shared_ptr, so that we don't overwrite local_router
+  srca = make_shared<remote_peer_detail_t>();
   const uint16_t nread = recv_n(server_fd, buffer, len, &srca->saddr);
 
   // resolve remote --> shared_ptr
