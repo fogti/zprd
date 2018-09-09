@@ -452,11 +452,12 @@ static string get_remote_desc(const remote_peer_t &addr) {
 }
 [[gnu::hot]]
 static string get_remote_desc(const remote_peer_ptr_t &addr) {
-  if(addr.unique())
-    return get_remote_desc(addr);
-  return addr->locked_crun([](const remote_peer_t &o) {
-    return get_remote_desc(o);
-  });
+  const remote_peer_t &peer = *addr;
+  return (addr.unique()
+    ? get_remote_desc(peer)
+    : peer.locked_crun([](const remote_peer_t &o)
+        { return get_remote_desc(o); })
+  );
 }
 
 static bool x_less(const remote_peer_ptr_t &a, const remote_peer_ptr_t &b) {
@@ -484,16 +485,13 @@ static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &it
   }
 
   // DEBUG: naive impl
+  const remote_peer_t &item_rp = *item;
   vector<remote_peer_ptr_t>::const_iterator xfit = vec.cend();
-  if(vec.size() == 1 && *vec.front() == *item) {
-    xfit = vec.begin();
-    goto naive_found;
-  }
-
   for(xfit = vec.begin(); xfit != vec.end(); ++xfit) {
-    if(**xfit == *item)
+    const remote_peer_t &xfrp = **xfit;
+    if(xfrp == item_rp)
       goto naive_found;
-    if((*xfit)->addr2string() == item->addr2string()) {
+    if(xfrp.addr2string() == item_rp.addr2string()) {
       printf("rem_peer NAIVE FOUND via string compare\n");
       goto naive_found;
     }
