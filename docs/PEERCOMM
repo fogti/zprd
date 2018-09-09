@@ -40,3 +40,6 @@ NOTES about ZPRD peer communication, ordered by version:
   we only set the checksum on the exit-point
   (the host, where the packet leaves thee tun device).
 
+0.2.5:
+
+  In this version, we support IPv6 as underlying protocol below ZPRD (not enough tested).
