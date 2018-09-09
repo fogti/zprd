@@ -1216,9 +1216,6 @@ int main(int argc, char *argv[]) {
       if(pdat.cent)
         found_remotes[pdat.cent - 1] = true;
 
-      // reset marker
-      pdat.to_proceed = false;
-
       // skip remotes which aren't timed out
       if(zs_likely((last_time - zprd_conf.remote_timeout) < pdat.seen))
         continue;
@@ -1261,17 +1258,16 @@ int main(int argc, char *argv[]) {
       auto &pdat = *spdat;
       if(pdat.to_discard)
         goto do_discard;
-      // marker
-      pdat.to_proceed = true;
       // check for duplicates
-      for(auto kt = remotes.cbegin(); kt != remotes.cend();) {
+      for(auto kt = it + 1; kt != remotes.cend();) {
         auto &odat = **kt;
-        if(odat.to_discard || pdat.to_proceed || pdat != odat)
-          continue;
-        // we found a duplicate
-        // delete the one which has a corresponding config entry or a lower use count
-        ((!pdat.cent && odat.cent) || (spdat.use_count() < kt->use_count()) ? &pdat : &odat)
-          ->to_discard = true;
+        if(!odat.to_discard && pdat == odat) {
+          // we found a duplicate
+          // delete the one which has a corresponding config entry or a lower use count
+          ((!pdat.cent && odat.cent) || (spdat.use_count() < kt->use_count()) ? &pdat : &odat)
+            ->to_discard = true;
+        }
+        ++kt;
       }
       if(pdat.to_discard)
         goto do_discard;

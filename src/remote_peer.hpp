@@ -63,7 +63,6 @@ struct remote_peer_detail_t : remote_peer_t {
   time_t seen;
   size_t cent; // config entry
   bool to_discard; // should this entry be deleted in the next cleanup round?
-  bool to_proceed; // should this entry be mangled in the next cleanup round?
 
   remote_peer_detail_t() noexcept;
   explicit remote_peer_detail_t(const sockaddr_storage &sas) noexcept;
