@@ -443,6 +443,22 @@ static bool init_all(const string &confpath) {
   return true;
 }
 
+// get_remote_desc: returns a description string of socket ip
+[[gnu::hot]]
+static string get_remote_desc(const remote_peer_t &addr) {
+  return (addr == remote_peer_t())
+         ? string("local")
+         : (string("peer ") + addr.addr2string());
+}
+[[gnu::hot]]
+static string get_remote_desc(const remote_peer_ptr_t &addr) {
+  if(addr.unique())
+    return get_remote_desc(addr);
+  return addr->locked_crun([](const remote_peer_t &o) {
+    return get_remote_desc(o);
+  });
+}
+
 template<typename T, typename Fn>
 static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
   // perform a binary find
@@ -457,12 +473,18 @@ static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
 
 static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
   typedef remote_peer_ptr_t ptr_t;
+
   if(xg_rem_peer(vec, item, less<ptr_t>())) return true;
   if(xg_rem_peer(vec, item,
     [](const ptr_t &a, const ptr_t &b) { return (*a) < (*b); }
   )) return true;
 
   return false;
+
+  found: // DEBUG
+  const string peerdesc = get_remote_desc(item);
+  printf("DEBUG: rem_peer %s found\n", peerdesc.c_str());
+  return true;
 }
 
 void sender_t::worker_fn() noexcept {
@@ -658,28 +680,6 @@ static route_via_t* have_route(const zs_addr_t dsta) noexcept {
     (it == routes.end() || it->second.empty())
       ? nullptr : &(it->second)
   );
-}
-
-// get_remote_desc: returns a description string of socket ip
-[[gnu::hot]]
-static string get_remote_desc(const zs_addr_t addr) {
-  return (addr == local_ip.s_addr)
-         ? string("local")
-         : (string("peer ") + inet_ntoa({addr}));
-}
-[[gnu::hot]]
-static string get_remote_desc(const remote_peer_t &addr) {
-  return (addr == remote_peer_t())
-         ? string("local")
-         : (string("peer ") + addr.addr2string());
-}
-[[gnu::hot]]
-static string get_remote_desc(const remote_peer_ptr_t &addr) {
-  if(addr.unique())
-    return get_remote_desc(addr);
-  return addr->locked_crun([](const remote_peer_t &o) {
-    return get_remote_desc(o);
-  });
 }
 
 /** get_peers
