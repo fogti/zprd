@@ -28,10 +28,6 @@ check_c_source_compiles(
   "static int __attribute__((pure)) zs_st_pure_func(const int x) { return 2 * x; }\nint main(void) { return zs_st_pure_func(0); }"
   HAVE_ATTRIB_PURE)
 
-check_cxx_source_compiles(
-  "#include <map>\n#include <utility>\nint main(void) { std::map<int, int> m{{1,5}, {2,10} }; auto nh = m.extract(2); nh.key() = 4; m.insert(std::move(nh)); return 0; }"
-  HAVE_MAP_EXTRACT)
-
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
 include_directories(src include "${PROJECT_BINARY_DIR}")
 
