@@ -464,46 +464,14 @@ static bool x_less(const remote_peer_ptr_t &a, const remote_peer_ptr_t &b) {
   return (*a) < (*b);
 }
 
-template<typename T, typename Fn>
-static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
+static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
   // perform a binary find
-  const auto it = lower_bound(vec.cbegin(), vec.cend(), item, fn);
+  const auto it = lower_bound(vec.cbegin(), vec.cend(), item, x_less);
   if(it == vec.cend() || (*it != item && **it != *item))
     return false;
   // erase element
   // NOTE: don't swap [back] with [*it], as that destructs sorted range
   vec.erase(it);
-  return true;
-}
-
-static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
-  // NOTE: DEBUG is going on
-  if(xg_rem_peer(vec, item, x_less)) {
-    const string peerdesc = get_remote_desc(item);
-    printf("DEBUG: rem_peer %s found\n", peerdesc.c_str());
-    return true;
-  }
-
-  // DEBUG: naive impl
-  const remote_peer_t &item_rp = *item;
-  vector<remote_peer_ptr_t>::const_iterator xfit = vec.cend();
-  for(xfit = vec.begin(); xfit != vec.end(); ++xfit) {
-    const remote_peer_t &xfrp = **xfit;
-    if(xfrp == item_rp)
-      goto naive_found;
-    if(xfrp.addr2string() == item_rp.addr2string()) {
-      printf("rem_peer NAIVE FOUND via string compare\n");
-      goto naive_found;
-    }
-  }
-
-  return false;
-
- naive_found:
-  printf("FATAL ERROR in rem_peer: xg_rem_peer doesn't work.\n");
-  const string peerdesc = get_remote_desc(item);
-  printf("ERROR DEBUG: rem_peer %s found\n", peerdesc.c_str());
-  if(xfit != vec.end()) vec.erase(xfit);
   return true;
 }
 
@@ -1038,6 +1006,7 @@ static bool read_packet(const int server_fd, shared_ptr<remote_peer_detail_t> &s
     if(const uint16_t dsum = IN_CKSUM(h_ip)) {
       printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
         h_ip->ip_sum, dsum);
+      print_packet(buffer, nread);
       return false;
     }
 
