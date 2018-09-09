@@ -443,26 +443,36 @@ static bool init_all(const string &confpath) {
   return true;
 }
 
-template<typename T, typename Fn>
-static bool xg_rem_peer(vector<T> &vec, const T &item, const Fn &fn) {
+// get_remote_desc: returns a description string of socket ip
+[[gnu::hot]]
+static string get_remote_desc(const remote_peer_t &addr) {
+  return (addr == remote_peer_t())
+         ? string("local")
+         : (string("peer ") + addr.addr2string());
+}
+[[gnu::hot]]
+static string get_remote_desc(const remote_peer_ptr_t &addr) {
+  const remote_peer_t &peer = *addr;
+  return (addr.unique()
+    ? get_remote_desc(peer)
+    : peer.locked_crun([](const remote_peer_t &o)
+        { return get_remote_desc(o); })
+  );
+}
+
+static bool x_less(const remote_peer_ptr_t &a, const remote_peer_ptr_t &b) {
+  return (*a) < (*b);
+}
+
+static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
   // perform a binary find
-  const auto it = lower_bound(vec.cbegin(), vec.cend(), item, fn);
-  if(it == vec.cend() || *it != item)
-   return false;
+  const auto it = lower_bound(vec.cbegin(), vec.cend(), item, x_less);
+  if(it == vec.cend() || (*it != item && **it != *item))
+    return false;
   // erase element
   // NOTE: don't swap [back] with [*it], as that destructs sorted range
   vec.erase(it);
   return true;
-}
-
-static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
-  typedef remote_peer_ptr_t ptr_t;
-  if(xg_rem_peer(vec, item, less<ptr_t>())) return true;
-  if(xg_rem_peer(vec, item,
-    [](const ptr_t &a, const ptr_t &b) { return (*a) < (*b); }
-  )) return true;
-
-  return false;
 }
 
 void sender_t::worker_fn() noexcept {
@@ -660,28 +670,6 @@ static route_via_t* have_route(const zs_addr_t dsta) noexcept {
   );
 }
 
-// get_remote_desc: returns a description string of socket ip
-[[gnu::hot]]
-static string get_remote_desc(const zs_addr_t addr) {
-  return (addr == local_ip.s_addr)
-         ? string("local")
-         : (string("peer ") + inet_ntoa({addr}));
-}
-[[gnu::hot]]
-static string get_remote_desc(const remote_peer_t &addr) {
-  return (addr == remote_peer_t())
-         ? string("local")
-         : (string("peer ") + addr.addr2string());
-}
-[[gnu::hot]]
-static string get_remote_desc(const remote_peer_ptr_t &addr) {
-  if(addr.unique())
-    return get_remote_desc(addr);
-  return addr->locked_crun([](const remote_peer_t &o) {
-    return get_remote_desc(o);
-  });
-}
-
 /** get_peers
  * generate a sorted vector from the keys of remotes map
  **/
@@ -696,7 +684,7 @@ static auto get_peers() {
 #else
   std::sort
 #endif
-    (ret.begin(), ret.end());
+    (ret.begin(), ret.end(), x_less);
 
   return ret;
 }
@@ -705,6 +693,7 @@ static void send_zprn_msg(const zprn &msg) {
   auto peers = get_peers();
 
   // split horizon
+  // FIXME: is currently broken
   if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
     if(const auto r = have_route(msg.zprn_un.route.dsta))
       rem_peer(peers, r->get_router());
@@ -1017,6 +1006,7 @@ static bool read_packet(const int server_fd, shared_ptr<remote_peer_detail_t> &s
     if(const uint16_t dsum = IN_CKSUM(h_ip)) {
       printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
         h_ip->ip_sum, dsum);
+      print_packet(buffer, nread);
       return false;
     }
 

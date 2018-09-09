@@ -23,8 +23,31 @@ remote_peer_t::remote_peer_t(const struct sockaddr_storage &sas) noexcept
 remote_peer_t::remote_peer_t(remote_peer_t &&o) noexcept
   { set_saddr(o.saddr, false); }
 
-static int compare_peers(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
-  { return memcmp(&lhs.saddr, &rhs.saddr, sizeof(lhs.saddr)); }
+static size_t sa_family2size(const struct sockaddr_storage &sas) noexcept {
+  switch(sas.ss_family) {
+    case AF_INET:
+      return sizeof(struct sockaddr_in);
+#ifdef USE_IPV6
+    case AF_INET6:
+      return sizeof(struct sockaddr_in6);
+#endif
+    default:
+      return sizeof(struct sockaddr_storage);
+  }
+}
+
+[[gnu::hot]]
+static int compare_peers(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept {
+  size_t offset, cmpsiz;
+  if(lhs.saddr.ss_family == rhs.saddr.ss_family) {
+    offset = 0;
+    cmpsiz = sa_family2size(lhs.saddr);
+  } else {
+    offset = offsetof(struct sockaddr_storage, ss_family);
+    cmpsiz = sizeof(sa_family_t);
+  }
+  return memcmp(&lhs.saddr + offset, &rhs.saddr + offset, cmpsiz);
+}
 
 bool operator==(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
   { return !compare_peers(lhs, rhs); }
