@@ -17,3 +17,5 @@ inline bool operator!=(const in_addr &a, const in_addr &b) noexcept {
 inline uint32_t cidr_to_netmask(const uint8_t suffix) noexcept {
   return htonl(~(0xffffffff >> suffix));
 }
+
+// TODO: add needed function 'cidr6_to_netmask'

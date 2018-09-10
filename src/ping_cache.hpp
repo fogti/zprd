@@ -4,7 +4,7 @@
  * License: GPL-2+
  **/
 #pragma once
-#include <addr_t.hpp>
+#include "iAFa.hpp"
 #include "remote_peer.hpp"
 
 class ping_cache_t final {
@@ -17,10 +17,11 @@ class ping_cache_t final {
   };
 
   struct data_t final {
-    zs_addr_t src, dst;
+    inner_addr_t src, dst;
     uint16_t id, seq;
 
-    data_t(const zs_addr_t _src = 0, const zs_addr_t _dst = 0,
+    data_t(): id(0), seq(0) { }
+    data_t(const inner_addr_t &_src, const inner_addr_t &_dst,
            const uint16_t _id = 0, const uint16_t _seq = 0) noexcept
       : src(_src), dst(_dst), id(_id), seq(_seq) { }
   };

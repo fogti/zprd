@@ -8,7 +8,6 @@
 #include <functional>
 #include <tuple>
 
-#include <addr_t.hpp>
 #include "remote_peer.hpp"
 #include "zprd_conf.hpp"
 

@@ -4,12 +4,13 @@
  * License: GPL-2+
  **/
 #pragma once
-#include <inttypes.h>
-#include <vector>
+#include <iAFa.hpp>
 #include <config.h>
 
+#include <inttypes.h>
+
 #pragma pack(push, 1)
-struct zprn {
+struct zprn_v1 final {
   uint8_t zprn_mgc;
   uint8_t zprn_ver;
 
@@ -33,7 +34,27 @@ struct zprn {
     } route;
   } zprn_un;
 
-  zprn() noexcept;
-  bool valid() const noexcept zs_attrib_pure;
+  zprn_v1() noexcept;
+  bool valid() const noexcept;
+};
+
+struct zprn_v2hdr final {
+  uint8_t zprn_mgc;
+  uint8_t zprn_ver;
+  uint8_t z__unused0;
+  uint8_t z__unused1;
+
+  bool valid() const noexcept;
+};
+
+struct zprn_v2 final {
+#define ZPRN2_PROBE 0x03
+
+  uint8_t zprn_cmd;  // command
+  uint8_t zprn_prio; // priority
+  inner_addr_t route;
+
+  // get real online needed size
+  size_t get_needed_size() const noexcept;
 };
 #pragma pack(pop)

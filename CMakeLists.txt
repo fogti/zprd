@@ -6,18 +6,10 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(USE_TBB "use the Intel Threading Building Blocks library" ON)
 option(USE_IPV6 "enable outer IPv6 support" ON)
-
-list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 find_package(Threads REQUIRED)
 find_package(LowlevelZS REQUIRED)
-if(USE_TBB)
-  find_package(TBB)
-else()
-  set(TBB_FOUND OFF)
-endif()
 
 include(CheckCSourceCompiles)
 include(CheckCXXSourceCompiles)
@@ -31,30 +23,18 @@ check_c_source_compiles(
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
 include_directories(src include "${PROJECT_BINARY_DIR}")
 
-if(${TBB_FOUND})
-  include_directories(${TBB_INCLUDE_DIRS})
-  add_definitions(${TBB_DEFINITIONS})
-endif()
-
 set(Z_COMMON_C_FLAGS "-fno-plt -ftree-vectorize -fno-unwind-tables -fno-asynchronous-unwind-tables")
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   ${Z_COMMON_C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${Z_COMMON_C_FLAGS} -fno-rtti -fno-exceptions")
 
 add_executable(zprd src/main.cxx src/cksum.c src/crw.c src/ping_cache.cxx
-                    src/remote_peer.cxx src/remote_peer_detail.cxx
+                    src/AFa.cxx src/iAFa.cxx src/remote_peer.cxx src/remote_peer_detail.cxx
                     src/resolve.cxx src/routes.cxx src/zprn.cxx)
 target_link_libraries(zprd Threads::Threads LowlevelZS::lowlevelzs)
-
-if(${TBB_FOUND})
-  target_link_libraries(zprd ${TBB_LIBRARIES})
-endif()
 
 function(src_compile_flags flag)
   set_property(SOURCE ${ARGN} APPEND_STRING PROPERTY COMPILE_FLAGS " ${flag}")
 endfunction()
-
-# use -fno-rtti on all C++ sources except the ones which use tbb::parallel_sort
-src_compile_flags("-frtti" src/main.cxx)
 
 # disable exceptions for files, which only contain 'noexcept' functions
 src_compile_flags("-fexceptions -funwind-tables" src/main.cxx src/routes.cxx)

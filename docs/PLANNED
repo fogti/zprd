@@ -17,6 +17,7 @@ Planned Things:
    - possible: PROBE before DELETE
      e.g. one node is outdated, first PROBE (when timeout) then DELETE (when timeout * 2)
      why: faster convergence
+   - ZPRNv2: compress ZPRN packets, (new mgc = 0x01)
 
   inner proto:
    - support for IPv6, and other protos

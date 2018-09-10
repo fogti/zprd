@@ -3,7 +3,6 @@
  * (C) 2018 Erik Zscheile
  */
 #pragma once
-#cmakedefine TBB_FOUND
 #cmakedefine USE_IPV6
 #cmakedefine HAVE_BUILTIN_EXPECT
 #cmakedefine HAVE_ATTRIB_PURE

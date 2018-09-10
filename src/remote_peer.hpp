@@ -6,12 +6,10 @@
  **/
 #pragma once
 #include <sys/socket.h> // sockaddr_storage
-#include <netinet/in.h> // in_addr_t
 #include <stddef.h>     // size_t
 #include <time.h>       // time_t
 
 #include <memory>
-#include <optional>
 #include <shared_mutex>
 #include <string>
 
@@ -85,3 +83,5 @@ struct remote_peer_detail_t : remote_peer_t {
     return fn(*this);
   }
 };
+
+typedef std::shared_ptr<remote_peer_detail_t> remote_peer_detail_ptr_t;

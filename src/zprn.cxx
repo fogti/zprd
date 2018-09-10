@@ -7,11 +7,11 @@
 #include <string.h>
 #include "zprn.hpp"
 
-zprn::zprn() noexcept : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0) {
+zprn_v1::zprn_v1() noexcept : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0) {
   memset(&zprn_un, 0, sizeof(zprn_un));
 }
 
-bool zs_attrib_pure zprn::valid() const noexcept {
+bool zprn_v1::valid() const noexcept {
   if(zprn_mgc || zprn_ver != 1)
     return false;
 
@@ -24,4 +24,14 @@ bool zs_attrib_pure zprn::valid() const noexcept {
     default:
       return false;
   }
+}
+
+bool zprn_v2hdr::valid() const noexcept {
+  if(zprn_mgc || zprn_ver != 2)
+    return false;
+  return true;
+}
+
+size_t zprn_v2::get_needed_size() const noexcept {
+  return 2 + route.get_tflen();
 }
