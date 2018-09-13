@@ -34,6 +34,7 @@ struct inner_addr_t final {
   char addr[IAFA_AL_MAX];
 
   inner_addr_t() noexcept : type(0) { }
+  inner_addr_t(const inner_addr_t &o) noexcept;
 
   // convert from IPv4 address
   explicit inner_addr_t(const uint32_t ip4a) noexcept;

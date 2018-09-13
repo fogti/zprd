@@ -24,6 +24,13 @@ static constexpr size_t zs_attrib_pure pli_at2alen(const iafa_at_t type) noexcep
   return type & IAFA_AL_MAX;
 }
 
+inner_addr_t::inner_addr_t(const inner_addr_t &o) noexcept
+  : type(o.type) {
+  const size_t oalen = o.get_alen();
+  memcpy(addr, o.addr, oalen);
+  memset(addr + oalen, 0, sizeof(addr) - oalen);
+}
+
 inner_addr_t::inner_addr_t(const uint32_t ip4a) noexcept : type(IAFA_AT_INET) {
   constexpr const size_t ip4alen = sizeof(ip4a);
   static_assert(ip4alen == pli_at2alen(IAFA_AT_INET));
