@@ -30,6 +30,8 @@
 #include <unistd.h>
 #include <net/if.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/ip6.h>
+#include <netinet/icmp6.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/epoll.h> // linux-specific epoll
@@ -161,11 +163,13 @@ static int local_fd;
 static unordered_map<sa_family_t, int> server_fds;
 
 static vector<remote_peer_detail_ptr_t> remotes;
+static vector<xner_addr_t> locals;
 static unordered_map<inner_addr_t, route_via_t, inner_addr_hash> routes;
 
 static sender_t     sender;
 static ping_cache_t ping_cache;
 
+// FIXME: replace local_{ip,netmask} with locals...
 static in_addr local_ip, local_netmask;
 static bool have_local_ip;
 
@@ -711,7 +715,6 @@ enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
 
-// TODO: implement send_icmpv6_msg
 static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, const remote_peer_ptr_t &source_ip) {
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   send_data dat{vector<char>(buflen, 0), {source_ip}};
@@ -759,10 +762,91 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
 
   // setup secondary payload = first 8 bytes of original payload
   memcpy(bufnxt, orig_hip + sizeof(ip),
-         std::max(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
+         std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip_len)));
 
   // calculate icmp checksum
   h_icmp->checksum = IN_CKSUM(h_icmp);
+  sender.enqueue(move(dat));
+}
+
+static void send_icmp6_msg(const zprd_icmpe msg, struct ip6_hdr * const orig_hip, const remote_peer_ptr_t &source_ip) {
+  constexpr const size_t ip6hlen = sizeof(struct ip6_hdr);
+  constexpr const size_t buflen = 2 * ip6hlen + sizeof(struct icmp6_hdr) + 8;
+  send_data dat{vector<char>(buflen, 0), {source_ip}, htons(IP_DF)};
+  char *const buffer = dat.buffer.data();
+
+  const auto h_ip = reinterpret_cast<struct ip6_hdr*>(buffer);
+  char * bufnxt  = buffer + ip6hlen;
+  h_ip->ip6_vfc  = 0x60;
+  h_ip->ip6_plen = htons(static_cast<uint16_t>(buflen - ip6hlen));
+  h_ip->ip6_nxt  = 0x3a;
+  h_ip->ip6_hops = MAXTTL;
+
+  // copy ip addrs
+  for(const auto &i : locals) {
+    if(i.type != IAFA_AT_INET6)
+      continue;
+    memcpy(&h_ip->ip6_src, i.addr, sizeof(struct in6_addr));
+    break;
+  }
+  memcpy(&h_ip->ip6_dst, &orig_hip->ip6_src, sizeof(struct in6_addr));
+
+  // setup ICMPv6 part
+  const auto h_icmp = reinterpret_cast<struct icmp6_hdr*>(bufnxt);
+  bufnxt += sizeof(struct icmp6_hdr);
+
+  switch(msg) {
+    case ZICMPM_TTL:
+      h_icmp->icmp6_type = 0x03;
+      h_icmp->icmp6_code = 0x00;
+      break;
+
+    case ZICMPM_UNREACH:
+      h_icmp->icmp6_type = 0x01;
+      h_icmp->icmp6_code = 0x00;
+      break;
+
+    case ZICMPM_UNREACH_NET:
+      h_icmp->icmp6_type = 0x01;
+      h_icmp->icmp6_code = 0x03;
+      break;
+
+    default:
+      fprintf(stderr, "SEND ERROR: invalid ZICMP Message code: %d\n", msg);
+      return;
+  }
+
+  // setup payload = orig ip header
+  memcpy(bufnxt, orig_hip, ip6hlen);
+  bufnxt += ip6hlen;
+
+  // setup secondary payload = first 8 bytes of original payload
+  memcpy(bufnxt, orig_hip + ip6hlen,
+         std::min(static_cast<unsigned short>(8), ntohs(orig_hip->ip6_plen)));
+
+  // calculate ICMPv6 checksum
+  // - create pseudo-header
+  // - calculate chksum
+  {
+    vector<char> pseudohdr;
+    pseudohdr.reserve(buflen);
+    // ip addrs
+    pseudohdr.insert(pseudohdr.end(), buffer + 8, buffer + 32);
+    // payload length
+    const uint32_t pll = htons(static_cast<uint32_t>(buflen - ip6hlen));
+    pseudohdr.insert(pseudohdr.end(), &pll, &pll + sizeof(pll));
+    // NULL
+    pseudohdr.emplace_back(0);
+    pseudohdr.emplace_back(0);
+    pseudohdr.emplace_back(0);
+    // ip6_nxt = 0x3a
+    pseudohdr.emplace_back(0x3a);
+    // REST
+    pseudohdr.insert(pseudohdr.end(), buffer + ip6hlen, buffer + buflen);
+    // update checksum
+    h_icmp->icmp6_cksum = in_cksum(reinterpret_cast<const uint16_t*>(pseudohdr.data()), pseudohdr.size());
+  }
+
   sender.enqueue(move(dat));
 }
 
@@ -810,6 +894,7 @@ static void send_zprn_msg(const zprn_v2 &msg) {
   sender.enqueue(zprn2_sdat{msg, move(peers)});
 }
 
+// TODO: add route6_packet
 /** route_packet:
  *
  * decide which socket is the destination,

@@ -35,6 +35,7 @@ struct inner_addr_t final {
 
   inner_addr_t() noexcept : type(0) { }
   inner_addr_t(const inner_addr_t &o) noexcept;
+  inner_addr_t(const sockaddr_storage &o) noexcept;
 
   // convert from IPv4 address
   explicit inner_addr_t(const uint32_t ip4a) noexcept;
@@ -46,10 +47,26 @@ struct inner_addr_t final {
   auto to_string() const -> std::string;
 };
 
+// similar POD like inner_addr_t, but for local endpoint addrs + netmask
+struct xner_addr_t final {
+  iafa_at_t type;
+  char addr[IAFA_AL_MAX];
+  char nmsk[IAFA_AL_MAX];
+
+  xner_addr_t() noexcept : type(0) { }
+  xner_addr_t(const xner_addr_t &o) noexcept;
+  xner_addr_t(const inner_addr_t &o, size_t pflen) noexcept;
+  void set_pflen(size_t pflen) noexcept;
+};
+
 bool operator==(const inner_addr_t &a, const inner_addr_t &b) noexcept;
 bool operator!=(const inner_addr_t &a, const inner_addr_t &b) noexcept;
+bool operator==(const xner_addr_t &a, const xner_addr_t &b) noexcept;
+bool operator!=(const xner_addr_t &a, const xner_addr_t &b) noexcept;
 
 // hash algorithm for unordered_map<inner_addr_t, ...>
 struct inner_addr_hash {
   size_t operator()(const inner_addr_t &addr) const noexcept;
 };
+
+void xner_apply_netmask(char * addr, const char * nmsk, size_t cmplen = IAFA_AL_MAX) noexcept;

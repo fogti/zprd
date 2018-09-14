@@ -20,6 +20,15 @@ sa_family_t zs_attrib_pure iafa_at2sa_family(const iafa_at_t type) noexcept {
   }
 }
 
+static iafa_at_t zs_attrib_pure sa_family2iafa_at(const sa_family_t sa_fam) noexcept {
+  switch(sa_fam) {
+    case AF_INET : return IAFA_AT_INET;
+    case AF_IPX  : return IAFA_AT_IPX;
+    case AF_INET6: return IAFA_AT_INET6;
+    default:       return 0;
+  }
+}
+
 static constexpr size_t zs_attrib_pure pli_at2alen(const iafa_at_t type) noexcept {
   return type & IAFA_AL_MAX;
 }
@@ -28,6 +37,13 @@ inner_addr_t::inner_addr_t(const inner_addr_t &o) noexcept
   : type(o.type) {
   const size_t oalen = o.get_alen();
   memcpy(addr, o.addr, oalen);
+  memset(addr + oalen, 0, sizeof(addr) - oalen);
+}
+
+inner_addr_t::inner_addr_t(const struct sockaddr_storage &o) noexcept {
+  type = sa_family2iafa_at(o.ss_family);
+  const size_t oalen = get_alen();
+  memcpy(addr, AFa_gp_addr(o), oalen);
   memset(addr + oalen, 0, sizeof(addr) - oalen);
 }
 
@@ -57,10 +73,59 @@ static int compare_addr(const inner_addr_t &lhs, const inner_addr_t &rhs) noexce
     : memcmp(&lhs.type, &rhs.type, sizeof(iafa_at_t));
 }
 
+[[gnu::hot]]
+static int compare_addr(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept {
+  if(lhs.type != rhs.type)
+    return memcmp(&lhs.type, &rhs.type, sizeof(iafa_at_t));
+  const size_t alen = pli_at2alen(lhs.type);
+  if(const int ret = memcmp(lhs.addr, rhs.addr, alen))
+    return ret;
+  return memcmp(lhs.nmsk, rhs.nmsk, alen);
+}
+
 bool operator==(const inner_addr_t &lhs, const inner_addr_t &rhs) noexcept
   { return !compare_addr(lhs, rhs); }
 bool operator!=(const inner_addr_t &lhs, const inner_addr_t &rhs) noexcept
   { return compare_addr(lhs, rhs); }
+
+bool operator==(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept
+  { return !compare_addr(lhs, rhs); }
+bool operator!=(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept
+  { return compare_addr(lhs, rhs); }
+
+xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept
+  : type(o.type) {
+  const size_t oalen = pli_at2alen(type), difl = sizeof(addr) - oalen;
+  memcpy(addr, o.addr, oalen);
+  memset(addr + oalen, 0, difl);
+  memcpy(nmsk, o.nmsk, oalen);
+  memset(nmsk + oalen, 0, difl);
+}
+
+xner_addr_t::xner_addr_t(const inner_addr_t &o, const size_t pflen) noexcept
+  : type(o.type) {
+  const size_t oalen = pli_at2alen(type);
+  memcpy(addr, o.addr, oalen);
+  memset(addr + oalen, 0, sizeof(addr) - oalen);
+  set_pflen(pflen);
+}
+
+// source: https://github.com/nmav/ipcalc/blob/master/ipcalc.c : ipv6_prefix_to_mask
+void xner_addr_t::set_pflen(const size_t pflen) noexcept {
+  if(pflen > (sizeof(nmsk) * 8)) return;
+  const size_t restbits = pflen % 8, fullbytes = pflen / 8;
+  char *pos = nmsk;
+  memset(pos, 0xff, fullbytes);
+  pos += fullbytes;
+  *pos = static_cast<unsigned long>(0xffU << (8 - restbits));
+  memset(pos + 1, 0, sizeof(nmsk) - fullbytes - 1);
+}
+
+[[gnu::hot]]
+void xner_apply_netmask(char * addr, const char * nmsk, const size_t cmplen) noexcept {
+  for(size_t i = 0; i < cmplen; ++i)
+    addr[i] &= nmsk[i];
+}
 
 #include <zs/ll/hash.hpp>
 
