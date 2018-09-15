@@ -26,12 +26,13 @@ bool resolve_hostname(const char * const hostname, struct sockaddr_storage &remo
   }
 
   struct addrinfo *siptr = servinfo;
-  for(; siptr; siptr = siptr->ai_next)
-    if(siptr->ai_family == preferred_af)
-      goto done;
-
-  // if no possible entry matches the preferred address family, use first
-  siptr = servinfo;
+  if(preferred_af != AF_UNSPEC) {
+    for(; siptr; siptr = siptr->ai_next)
+      if(siptr->ai_family == preferred_af)
+        goto done;
+    // if no possible entry matches the preferred address family, use first
+    siptr = servinfo;
+  }
 
  done:
   // copy ai_addr to remote + clear out unused rest

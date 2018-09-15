@@ -84,6 +84,8 @@ bool remote_peer_t::set2catchall() noexcept {
   return true;
 }
 
+#undef SA_XXX_PTR
+
 void remote_peer_t::set_port(const uint16_t port, const bool do_lock) noexcept {
   if(do_lock) {
     std::unique_lock<_mtx_t> lock(_mtx);
@@ -97,4 +99,17 @@ void remote_peer_t::set_port(const uint16_t port, const bool do_lock) noexcept {
     fprintf(stderr, "NOTICE: remote_peer::set_port: unsupported address family %u\n", static_cast<unsigned>(saddr.ss_family));
 }
 
-#undef SA_XXX_PTR
+void remote_peer_t::set_port_if_unset(const uint16_t port, const bool do_lock) noexcept {
+  if(do_lock) {
+    std::unique_lock<_mtx_t> lock(_mtx);
+    // single self-recursion
+    set_port_if_unset(port, false);
+    return;
+  }
+  if(uint16_t *portptr = AFa_gp_port(saddr)) {
+    if(!*portptr)
+      *portptr = htons(port);
+  } else {
+    fprintf(stderr, "NOTICE: remote_peer::set_port: unsupported address family %u\n", static_cast<unsigned>(saddr.ss_family));
+  }
+}

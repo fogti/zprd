@@ -39,6 +39,8 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
+// TODO: use getifaddrs(3) #include <ifaddrs.h>
+
 // C++
 #include <unordered_map>
 #include <fstream>
@@ -232,10 +234,11 @@ static bool setup_server_fd(const sa_family_t sa_family) {
 
 static void connect2server(const string &r, const size_t cent) {
   struct sockaddr_storage remote;
+  memset(&remote, 0, sizeof(remote));
   if(!resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af))
     return;
   auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
-  ptr->set_port(zprd_conf.data_port, false);
+  ptr->set_port_if_unset(zprd_conf.data_port, false);
   const string remote_desc = ptr->addr2string();
   remotes.emplace_back(move(ptr));
   printf("CLIENT: connected to server %s\n", remote_desc.c_str());
@@ -894,7 +897,6 @@ static void send_zprn_msg(const zprn_v2 &msg) {
   sender.enqueue(zprn2_sdat{msg, move(peers)});
 }
 
-// TODO: add route6_packet
 /** route_packet:
  *
  * decide which socket is the destination,
@@ -911,9 +913,7 @@ static void send_zprn_msg(const zprn_v2 &msg) {
  **/
 [[gnu::hot]]
 static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
-  const bool source_is_local = have_local_ip && (*source_peer == remote_peer_t());
-  if(!source_is_local)
-    source_peer->seen = last_time;
+  const bool source_is_local = (*source_peer == remote_peer_t());
 
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
@@ -1070,32 +1070,42 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 
   sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
 }
+[[gnu::hot]]
+static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
+  const bool source_is_local = (*source_peer == remote_peer_t());
+
+  const auto h_ip    = reinterpret_cast<struct ip6_hdr*>(buffer);
+  const bool is_icmp = (h_ip->ip6_nxt == 0x3a);
+
+  if(is_icmp && (sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)) > buflen) {
+    printf("ROUTER: drop packet (too small icmp6 packet; size = %u) from %s\n", buflen, source_desc_c);
+    return;
+  }
+
+  // NOTE: h_icmp is only valid if is_icmp is true
+  const auto h_icmp  = reinterpret_cast<const struct icmp6_hdr*>(buffer + sizeof(ip6_hdr));
+
+  
+}
 
 static uint8_t get_ip_version(const char buffer[], const uint16_t len) {
   if(len < 2) return 255;
   return reinterpret_cast<const struct ip*>(buffer)->ip_v;
 }
 
-/** is_ipv4_packet
- * checks, if packet is a valid ipv4 packet
- *
- * @param buffer  the packet data
- * @param len     the length of the packet
- * @ret           is valid
- **/
-static bool is_ipv4_packet(const char * const source_desc_c, const char buffer[], const uint16_t len) {
-  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
+// function to route a generic IP-whatever packet
+static void route_genip_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
+  typedef void (*genip_route_fn)(const remote_peer_detail_ptr_t&, char * __restrict__, uint16_t, const char * __restrict__);
+  static const unordered_map<uint8_t, genip_route_fn> jt = {
+    { 4, route_packet },
+    { 6, route6_packet },
+  };
 
-  if(sizeof(struct ip) > len) {
-    printf("ROUTER ERROR: received invalid ip packet (too small, size = %u)", len);
-  } else if(h_ip->ip_v != 4) {
-    printf("ROUTER ERROR: received a non-ipv4 packet (wrong version = %u)", h_ip->ip_v);
-  } else {
-    return true;
-  }
+  if(*source_peer != remote_peer_t())
+    source_peer->seen = last_time;
 
-  printf(" from %s\n", source_desc_c);
-  return false;
+  const auto it = jt.find(get_ip_version(buffer, buflen));
+  if(it != jt.end()) (it->second)(source_peer, buffer, buflen, source_desc_c);
 }
 
 // is inner_addr:o a local ip?
@@ -1299,38 +1309,45 @@ static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char 
   return false;
 }
 
+// FIXME: add verify_ipv6_packet
+
 /** read_packet
  * reads an variable length packet
  *
  * @param srca    (in/out) the source ip (router)
  * @param buffer  (out) the target storage (with size len)
  * @param len     (in/out) the length of the packet
- * @ret           succesful marker
  **/
-static bool read_packet(const int server_fd, remote_peer_detail_ptr_t &srca, char buffer[], uint16_t &len, string &source_desc) {
+static void read_packet(const int server_fd, remote_peer_detail_ptr_t &srca, char buffer[], uint16_t &len) {
   // create new shared_ptr, so that we don't overwrite previous src'peer
   srca = make_shared<remote_peer_detail_t>();
-  const uint16_t nread = recv_n(server_fd, buffer, len, &srca->saddr);
+  len  = recv_n(server_fd, buffer, len, &srca->saddr);
 
   // resolve remote --> shared_ptr
   find_or_emplace_peer(remotes, srca);
+}
 
+/** verify_packet
+ * verifies an variable length packet
+ */
+static bool verify_packet(const remote_peer_detail_ptr_t &srca, char buffer[], uint16_t &len, string &source_desc) {
   source_desc = get_remote_desc(srca);
-  const char * const source_desc_c = source_desc.c_str();
+  const auto source_desc_c = source_desc.c_str();
 
-  switch(const auto ipver = get_ip_version(buffer, nread)) {
+  switch(const auto ipver = get_ip_version(buffer, len)) {
     case 0:
-      if(!handle_zprn_pkt(srca, buffer, nread, source_desc_c))
+      if(!handle_zprn_pkt(srca, buffer, len, source_desc_c))
         printf("ROUTER ERROR: got invalid ZPRN packet from %s\n", source_desc_c);
       break;
 
     case 4:
-      if(!is_ipv4_packet(source_desc_c, buffer, nread))
-        return false;
-
-      return verify_ipv4_packet(srca, buffer, len, nread, source_desc_c);
+      if(sizeof(struct ip) > len)
+        goto length_error;
+      return verify_ipv4_packet(srca, buffer, len, len, source_desc_c);
 
     case 6:
+      if(sizeof(struct ip6_hdr) > len)
+        goto length_error;
       // FIXME: handle AF_INET6
 
     default:
@@ -1338,6 +1355,10 @@ static bool read_packet(const int server_fd, remote_peer_detail_ptr_t &srca, cha
       printf("ROUTER ERROR: received a packet with unknown payload type (wrong ip_ver = %u) from %s\n", ipver, source_desc_c);
   }
   return false;
+
+  length_error:
+    printf("ROUTER ERROR: received invalid ip packet (too small, size = %u) from %s\n", len, source_desc_c);
+    return false;
 }
 
 static string format_time(const time_t x) {
@@ -1506,13 +1527,13 @@ int main(int argc, char *argv[]) {
         if(cur_fd == local_fd) {
           // data from tun/tap: just read it and write it to the network
           nread = cread(local_fd, buffer, BUFSIZE);
-          if(is_ipv4_packet("local", buffer, nread))
-            route_packet(local_router, buffer, nread, "local");
+          peer_ptr = local_router;
         } else {
           // data from the network: read it, and write it to the tun/tap interface.
-          if(read_packet(cur_fd, peer_ptr, buffer, nread, source_desc))
-            route_packet(peer_ptr, buffer, nread, source_desc.c_str());
+          read_packet(cur_fd, peer_ptr, buffer, nread);
         }
+        if(nread && verify_packet(peer_ptr, buffer, nread, source_desc))
+          route_genip_packet(peer_ptr, buffer, nread, source_desc.c_str());
       }
 
       // only cleanup things if at least 1 second passed since last iteration

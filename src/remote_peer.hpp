@@ -36,6 +36,7 @@ class remote_peer_t : public std::enable_shared_from_this<remote_peer_t> {
   //  used by main.cxx:setup_server_fd
   bool set2catchall() noexcept;
   void set_port(uint16_t port, bool do_lock = true) noexcept;
+  void set_port_if_unset(uint16_t port, bool do_lock = true) noexcept;
 
   // NOTE: eventually, check if try{ shared_from_this()->unique() } catch { true },
   //       and omit lock in that case (but this could create some race conditions in rare cases)
