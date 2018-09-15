@@ -57,6 +57,7 @@
 #include <addr.hpp>
 #include "crest.h"
 #include "crw.h"
+#include "AFa.hpp"
 #include "iAFa.hpp"
 #include "ping_cache.hpp"
 #include "remote_peer.hpp"
@@ -1019,7 +1020,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
       memcpy(tmp, &ip_dst.s_addr, sizeof(tmp));
       xner_apply_netmask(tmp, aptr->nmsk, sizeof(tmp));
       send_icmp_msg((
-        ((!locals.empty()) && !memcmp(aptr->addr, tmp, sizeof(tmp)))
+        (!memcmp(aptr->addr, tmp, sizeof(tmp)))
           ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
       ), h_ip, source_peer);
     }
@@ -1078,6 +1079,10 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
 }
 
+static string helper_ip6a2string(const in6_addr &a) {
+  return AFa_addr2string(AF_INET6, reinterpret_cast<const char*>(&a));
+}
+
 [[gnu::hot]]
 static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
   const bool source_is_local = (*source_peer == remote_peer_t());
@@ -1107,9 +1112,11 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
 
   const auto &ip_src = h_ip->ip6_src;
   const auto &ip_dst = h_ip->ip6_dst;
+  const inner_addr_t iaddr_src(ip_src);
+  const inner_addr_t iaddr_dst(ip_dst);
 
   // am I an endpoint
-  const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(inner_addr_t(ip_dst)));
+  const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(iaddr_dst));
 
   // we can use the ttl directly, it is 1 byte long
   if((!h_ip->ip6_hops) || (!iam_ep && h_ip->ip6_hops == 1)) {
@@ -1123,8 +1130,79 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   // decrement ttl
   if(!iam_ep) --(h_ip->ip6_hops);
 
+  // update routes
+  if(routes[iaddr_src].add_router(
+      source_peer,
+      am_ii_addr(iaddr_src) ? 0 : (MAXTTL - h_ip->ip6_hops)
+  )) {
+    const string srcnam = helper_ip6a2string(ip_src);
+    printf("ROUTER: add route to %s via %s\n", srcnam.c_str(), source_desc_c);
+  }
 
-  // TODO
+  const string dstnam = helper_ip6a2string(ip_dst);
+  vector<remote_peer_ptr_t> ret;
+
+  // get route to destination
+  if(iam_ep && am_ii_addr(iaddr_dst)) {
+    ret.emplace_back(make_shared<remote_peer_t>());
+  } else if(const auto r = have_route(inner_addr_t(ip_dst))) {
+    ret.emplace_back(r->get_router());
+  } else {
+    printf("ROUTER: no known route to %s\n", dstnam.c_str());
+    ret = get_peers();
+  }
+
+  // split horizon
+  rem_peer(ret, source_peer);
+
+  if(ret.empty()) {
+    printf("ROUTER: drop packet (no destination) from %s\n", source_desc_c);
+    if(is_icmp_errmsg) return;
+
+    if(const auto aptr = get_local_aptr(IAFA_AT_INET6)) {
+      char tmp[sizeof(in6_addr)];
+      memcpy(tmp, &ip_dst, sizeof(tmp));
+      xner_apply_netmask(tmp, aptr->nmsk, sizeof(tmp));
+      send_icmp6_msg((
+        (!memcmp(aptr->addr, tmp, sizeof(tmp)))
+          ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
+      ), h_ip, source_peer);
+    }
+
+    // to prevent routing loops
+    // drop routing table entry, if there is any
+    if(const auto route = have_route(inner_addr_t(ip_dst))) {
+      const auto d = get_remote_desc(route->get_router());
+      printf("ROUTER: delete route to %s via %s (invalid)\n", dstnam.c_str(), d.c_str());
+      route->del_primary_router();
+    }
+    return;
+  }
+
+  if(is_icmp) {
+    if(is_icmp_errmsg) {
+      const size_t mcpos = sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr);
+      if(rm_route && ((mcpos + sizeof(struct ip6_hdr)) <= buflen)) {
+        // drop outdated routing table entry, if there is any
+        //  target = original destination
+        const auto &target = reinterpret_cast<const struct ip6_hdr*>(buffer + mcpos)->ip6_dst;
+        inner_addr_t iaddr_trg(target);
+        if(const auto r = have_route(iaddr_trg)) {
+          if(r->del_router(source_peer)) {
+            // routing table entry dropped
+            const string trgnam = iaddr_trg.to_string();
+            printf("ROUTER: delete route to %s via %s (unreachable)\n", trgnam.c_str(), source_desc_c);
+          }
+          // if there is a routing table entry left -> discard
+          if(!r->empty()) return;
+        }
+      }
+    }
+    // TODO: handle pings
+  }
+
+  sender.enqueue({{buffer, buffer + buflen}, move(ret), htons(IP_DF),
+    (ntohl(h_ip->ip6_flow) & 0xFF00000) >> 20}); // this line extracts the Type-Of-Service field from the inclusive flow label field
 }
 
 static uint8_t get_ip_version(const char buffer[], const uint16_t len) {
