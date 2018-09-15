@@ -1352,6 +1352,38 @@ static void zprn_v2_connmgmt_handler(const remote_peer_ptr_t &srca, const char *
   }
 }
 
+/* ZPRNv2 PROBE REQUEST
+ * The PROBE request is similar to the ROUTEMOD:DELETE request,
+ * with the difference, that the RMD handler deletes the route
+ * and the PRB handler keeps it
+ */
+static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * const source_desc_c, const zprn_v2 &d) noexcept {
+  if(!d.zprn_prio) return;
+
+  const auto &dsta = d.route;
+  const string dstdesc = dsta.to_string();
+  const char * const ddcs = dstdesc.c_str();
+
+  zprn_v2 msg = d;
+
+  if(d.zprn_prio == 0xff) {
+    // got probe request
+    if(am_ii_addr(dsta)) // a route to us is probed (and we know we are here)
+      msg.zprn_prio = 0;
+    else if(const auto r = have_route(dsta)) { // we have a route
+      msg.zprn_prio = r->_routers.front().hops;
+      if(msg.zprn_prio == 0xff)
+        return;
+    } else
+      return;
+    sender.enqueue(zprn2_sdat{msg, {srca}});
+  } else {
+    // got probe response
+    if(routes[dsta].add_router(srca, d.zprn_prio + 1))
+      printf("ROUTER: refresh route to %s via %s (notified)\n", ddcs, source_desc_c);
+  }
+}
+
 static void print_packet(const char buffer[], const uint16_t len) {
   printf("ROUTER DEBUG: pktdat:");
   const char * const ie = buffer + std::min(len, static_cast<uint16_t>(80));
@@ -1378,6 +1410,7 @@ static bool handle_zprn_v2_pkt(const remote_peer_detail_ptr_t &srca, char buffer
   static const unordered_map<uint8_t, zprn_v2_handler_t> dpt = {
     { ZPRN_ROUTEMOD, zprn_v2_routemod_handler },
     { ZPRN_CONNMGMT, zprn_v2_connmgmt_handler },
+    { ZPRN2_PROBE  , zprn_v2_probe_handler    },
   };
 
   const auto h_zprn = reinterpret_cast<const struct zprn_v2hdr*>(buffer);
@@ -1652,6 +1685,7 @@ int main(int argc, char *argv[]) {
   my_signal(SIGINT, do_shutdown);
   my_signal(SIGTERM, do_shutdown);
 
+  const int ep_timeout = 2000 * zprd_conf.remote_timeout;
   int retcode = 0, epevcnt;
 
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
@@ -1666,7 +1700,7 @@ int main(int argc, char *argv[]) {
     { // use select() to handle two descriptors at once
       const auto pastt = last_time;
 
-      epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, -1);
+      epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, ep_timeout);
 
       if(epevcnt == -1) {
         if(errno == EINTR) continue;
@@ -1734,8 +1768,10 @@ int main(int argc, char *argv[]) {
 
     // cleanup routes, needs to be done after del_router calls
     zprn_v2 msg;
-    msg.zprn_cmd = ZPRN_ROUTEMOD;
+    // when seen is smaller than the following time, the route will be probed
+    const time_t route_probe_tin = last_time - zprd_conf.remote_timeout;
     for(auto it = routes.begin(); it != routes.end();) {
+      msg.route = it->first;
       auto &ise = it->second;
       ise.cleanup([=](const remote_peer_ptr_t &router)
         { del_route_msg(*it, router); });
@@ -1743,9 +1779,12 @@ int main(int argc, char *argv[]) {
       const bool iee = ise.empty();
       if(iee || ise._fresh_add) {
         ise._fresh_add = false;
-
+        msg.zprn_cmd = ZPRN_ROUTEMOD;
         msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
-        msg.route = it->first;
+        send_zprn_msg(msg);
+      } else if(!iee && ise._routers.front().seen < route_probe_tin) {
+        msg.zprn_cmd = ZPRN2_PROBE;
+        msg.zprn_prio = 0xff;
         send_zprn_msg(msg);
       }
 
