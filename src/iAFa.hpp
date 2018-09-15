@@ -26,7 +26,7 @@ zs_attrib_pure
 sa_family_t iafa_at2sa_family(const iafa_at_t type) noexcept;
 
 // POD for inner addresses
-struct inner_addr_t final {
+struct inner_addr_t {
   // type consists of two parts:
   //  first 2 bytes = type: ETH_P_* -alike spec , but (type & IAFA_AL_MAX) == get_alen()
   iafa_at_t type;
@@ -52,12 +52,9 @@ struct inner_addr_t final {
 };
 
 // similar POD like inner_addr_t, but for local endpoint addrs + netmask
-struct xner_addr_t final {
-  iafa_at_t type;
-  char addr[IAFA_AL_MAX];
+struct xner_addr_t final : inner_addr_t {
   char nmsk[IAFA_AL_MAX];
 
-  xner_addr_t() noexcept : type(0) { }
   xner_addr_t(const xner_addr_t &o) noexcept;
   xner_addr_t(const inner_addr_t &o, size_t pflen) noexcept;
   void set_pflen(size_t pflen) noexcept;

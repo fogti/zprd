@@ -100,8 +100,8 @@ bool operator==(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept
 bool operator!=(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept
   { return compare_addr(lhs, rhs); }
 
-xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept
-  : type(o.type) {
+xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept : inner_addr_t() {
+  type = o.type;
   const size_t oalen = pli_at2alen(type), difl = sizeof(addr) - oalen;
   memcpy(addr, o.addr, oalen);
   memset(addr + oalen, 0, difl);
@@ -110,12 +110,7 @@ xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept
 }
 
 xner_addr_t::xner_addr_t(const inner_addr_t &o, const size_t pflen) noexcept
-  : type(o.type) {
-  const size_t oalen = pli_at2alen(type);
-  memcpy(addr, o.addr, oalen);
-  memset(addr + oalen, 0, sizeof(addr) - oalen);
-  set_pflen(pflen);
-}
+  : inner_addr_t(o) { set_pflen(pflen); }
 
 // source: https://github.com/nmav/ipcalc/blob/master/ipcalc.c : ipv6_prefix_to_mask
 void xner_addr_t::set_pflen(const size_t pflen) noexcept {

@@ -1431,7 +1431,10 @@ static void send_zprn_connmgmt_msg(const uint8_t prio) {
   zprn_v2 msg;
   msg.zprn_cmd = ZPRN_CONNMGMT;
   msg.zprn_prio = prio;
-  msg.route = inner_addr_t(local_ip.s_addr);
+  if(locals.empty())
+    memset(&msg.route, 0, sizeof(msg.route));
+  else
+    msg.route = locals.front();
   send_zprn_msg(msg);
 }
 
