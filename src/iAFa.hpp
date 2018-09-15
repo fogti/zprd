@@ -25,6 +25,10 @@ typedef uint16_t iafa_at_t;
 zs_attrib_pure
 sa_family_t iafa_at2sa_family(const iafa_at_t type) noexcept;
 
+static inline constexpr size_t zs_attrib_pure pli_at2alen(const iafa_at_t type) noexcept {
+  return type & IAFA_AL_MAX;
+}
+
 // POD for inner addresses
 struct inner_addr_t {
   // type consists of two parts:

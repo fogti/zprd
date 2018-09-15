@@ -29,10 +29,6 @@ static iafa_at_t zs_attrib_pure sa_family2iafa_at(const sa_family_t sa_fam) noex
   }
 }
 
-static constexpr size_t zs_attrib_pure pli_at2alen(const iafa_at_t type) noexcept {
-  return type & IAFA_AL_MAX;
-}
-
 inner_addr_t::inner_addr_t(const inner_addr_t &o) noexcept
   : type(o.type) {
   const size_t oalen = o.get_alen();

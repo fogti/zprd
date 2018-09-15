@@ -171,10 +171,6 @@ static unordered_map<inner_addr_t, route_via_t, inner_addr_hash> routes;
 static sender_t     sender;
 static ping_cache_t ping_cache;
 
-// FIXME: replace local_{ip,netmask} with locals...
-static in_addr local_ip, local_netmask;
-static bool have_local_ip;
-
 /*** helper functions ***/
 
 static sa_family_t str2preferred_af(string afdesc) {
@@ -296,8 +292,6 @@ static bool init_all(const string &confpath) {
     zprd_conf.data_port      = 45940; // P45940
     zprd_conf.remote_timeout = 600;   // T600   = 10 min
     zprd_conf.preferred_af   = AF_UNSPEC;
-    local_ip.s_addr          = htonl(0);
-    have_local_ip            = false;
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
@@ -351,10 +345,8 @@ static bool init_all(const string &confpath) {
 
     const string zs_devstr = " dev '" + zprd_conf.iface + "'";
 
+    runcmd("ip addr flush '" + zprd_conf.iface + "'");
     if(!addrs.empty()) {
-      have_local_ip = true;
-
-      runcmd("ip addr flush '" + zprd_conf.iface + "'");
       for(const auto &i : addrs)
         runcmd("ip addr add '" + i + "'" + zs_devstr);
 
@@ -700,6 +692,33 @@ void sender_t::stop() noexcept {
   _cond.notify_all();
 }
 
+// is inner_addr:o a local ip?
+static bool am_ii_addr(const inner_addr_t &o) noexcept {
+  for(const auto &i : locals)
+    if(*reinterpret_cast<const inner_addr_t *>(&i) == o)
+      return true;
+  return false;
+}
+
+static auto get_local_aptr(const iafa_at_t preferred_at) noexcept -> const xner_addr_t* {
+  for(const auto &i : locals) {
+    if(i.type != preferred_at)
+      continue;
+    return &i;
+  }
+  return 0;
+}
+
+static void get_local_addr(const iafa_at_t preferred_at, char *const addr) noexcept {
+  if(const auto i = get_local_aptr(preferred_at))
+    memcpy(addr, i->addr, pli_at2alen(preferred_at));
+}
+
+template<typename T>
+static void get_local_addr(const iafa_at_t preferred_at, T *const addr) noexcept {
+  get_local_addr(preferred_at, reinterpret_cast<char*>(addr));
+}
+
 enum zprd_icmpe {
   ZICMPM_TTL, ZICMPM_UNREACH, ZICMPM_UNREACH_NET
 };
@@ -717,7 +736,7 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
   h_ip->ip_id  = rand();
   h_ip->ip_ttl = MAXTTL;
   h_ip->ip_p   = IPPROTO_ICMP;
-  h_ip->ip_src = local_ip;
+  get_local_addr(IAFA_AT_INET, &h_ip->ip_src);
   h_ip->ip_dst = orig_hip->ip_src;
 
   const auto h_icmp = reinterpret_cast<struct icmphdr*>(bufnxt);
@@ -772,12 +791,7 @@ static void send_icmp6_msg(const zprd_icmpe msg, struct ip6_hdr * const orig_hip
   h_ip->ip6_hops = MAXTTL;
 
   // copy ip addrs
-  for(const auto &i : locals) {
-    if(i.type != IAFA_AT_INET6)
-      continue;
-    memcpy(&h_ip->ip6_src, i.addr, sizeof(struct in6_addr));
-    break;
-  }
+  get_local_addr(IAFA_AT_INET6, &h_ip->ip6_src);
   memcpy(&h_ip->ip6_dst, &orig_hip->ip6_src, sizeof(struct in6_addr));
 
   // setup ICMPv6 part
@@ -951,9 +965,11 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 
   const auto &ip_src = h_ip->ip_src;
   const auto &ip_dst = h_ip->ip_dst;
+  const inner_addr_t iaddr_src(ip_src.s_addr);
+  const inner_addr_t iaddr_dst(ip_dst.s_addr);
 
   // am I an endpoint
-  const bool iam_ep = have_local_ip && (source_is_local || ip_dst == local_ip);
+  const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(iaddr_dst));
 
   // we can use the ttl directly, it is 1 byte long
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
@@ -971,16 +987,16 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   h_ip->ip_sum = 0;
 
   // update routes
-  if(routes[inner_addr_t(ip_src.s_addr)].add_router(
+  if(routes[iaddr_src].add_router(
       source_peer,
-      (have_local_ip && local_ip == ip_src) ? 0 : (MAXTTL - h_ip->ip_ttl)
+      am_ii_addr(iaddr_src) ? 0 : (MAXTTL - h_ip->ip_ttl)
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   vector<remote_peer_ptr_t> ret;
 
   // get route to destination
-  if(iam_ep && ip_dst == local_ip) {
+  if(iam_ep && am_ii_addr(iaddr_dst)) {
     ret.emplace_back(make_shared<remote_peer_t>());
   } else if(const auto r = have_route(ip_dst.s_addr)) {
     ret.emplace_back(r->get_router());
@@ -998,10 +1014,15 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
     printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(is_icmp_errmsg) return;
 
-    send_icmp_msg((
-      (have_local_ip && (local_ip.s_addr & local_netmask.s_addr) == (ip_dst.s_addr & local_netmask.s_addr))
-        ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
-    ), h_ip, source_peer);
+    if(const auto aptr = get_local_aptr(IAFA_AT_INET)) {
+      char tmp[4];
+      memcpy(tmp, &ip_dst.s_addr, sizeof(tmp));
+      xner_apply_netmask(tmp, aptr->nmsk, sizeof(tmp));
+      send_icmp_msg((
+        ((!locals.empty()) && !memcmp(aptr->addr, tmp, sizeof(tmp)))
+          ? ZICMPM_UNREACH : ZICMPM_UNREACH_NET
+      ), h_ip, source_peer);
+    }
 
     // to prevent routing loops
     // drop routing table entry, if there is any
@@ -1034,7 +1055,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
        *  echoreply : source and destination are swapped
        **/
       const auto &echo = h_icmp->un.echo;
-      const ping_cache_t::data_t edat(inner_addr_t(ip_src.s_addr), inner_addr_t(ip_dst.s_addr), echo.id, echo.sequence);
+      const ping_cache_t::data_t edat(iaddr_src, iaddr_dst, echo.id, echo.sequence);
       switch(h_icmp->type) {
         case ICMP_ECHO:
           ping_cache.init(edat, ret.front());
@@ -1056,20 +1077,52 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 
   sender.enqueue({{buffer, buffer + buflen}, move(ret), h_ip->ip_off, h_ip->ip_tos});
 }
+
 [[gnu::hot]]
 static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
   const bool source_is_local = (*source_peer == remote_peer_t());
 
-  const auto h_ip    = reinterpret_cast<struct ip6_hdr*>(buffer);
-  const bool is_icmp = (h_ip->ip6_nxt == 0x3a);
+  const auto h_ip     = reinterpret_cast<struct ip6_hdr*>(buffer);
+  // TODO: there could be other IPv6 headers before ICMPv6
+  const bool is_icmp  = (h_ip->ip6_nxt == 0x3a);
 
   if(is_icmp && (sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)) > buflen) {
     printf("ROUTER: drop packet (too small icmp6 packet; size = %u) from %s\n", buflen, source_desc_c);
     return;
   }
 
+  // === EVALUATE ICMP MESSAGES ^ route_packet
   // NOTE: h_icmp is only valid if is_icmp is true
-  const auto h_icmp  = reinterpret_cast<const struct icmp6_hdr*>(buffer + sizeof(ip6_hdr));
+  const auto h_icmp   = reinterpret_cast<const struct icmp6_hdr*>(buffer + sizeof(ip6_hdr));
+  const bool is_icmp_errmsg = is_icmp && !(h_icmp->icmp6_type & 0x80);
+  const bool rm_route = is_icmp_errmsg && ([h_icmp] {
+    switch(h_icmp->icmp6_type) {
+      case 1:
+      case 3:
+        return true;
+      default:
+        return false;
+    }
+  })();
+
+  const auto &ip_src = h_ip->ip6_src;
+  const auto &ip_dst = h_ip->ip6_dst;
+
+  // am I an endpoint
+  const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(inner_addr_t(ip_dst)));
+
+  // we can use the ttl directly, it is 1 byte long
+  if((!h_ip->ip6_hops) || (!iam_ep && h_ip->ip6_hops == 1)) {
+    // ttl is too low -> DROP
+    printf("ROUTER: drop packet (too low ttl = %u) from %s\n", h_ip->ip6_hops, source_desc_c);
+    if(!is_icmp_errmsg)
+      send_icmp6_msg(ZICMPM_TTL, h_ip, source_peer);
+    return;
+  }
+
+  // decrement ttl
+  if(!iam_ep) --(h_ip->ip6_hops);
+
 
   // TODO
 }
@@ -1094,14 +1147,6 @@ static void route_genip_packet(const remote_peer_detail_ptr_t &source_peer, char
   if(it != jt.end()) (it->second)(source_peer, buffer, buflen, source_desc_c);
 }
 
-// is inner_addr:o a local ip?
-static bool am_ii_addr(const inner_addr_t &o) noexcept {
-  for(const auto &i : locals)
-    if(*reinterpret_cast<const inner_addr_t *>(&i) == o)
-      return true;
-  return false;
-}
-
 // handlers for incoming ZPRN packets
 typedef void (*zprn_v1_handler_t)(const char * const, const remote_peer_ptr_t&, const zprn_v1&);
 
@@ -1123,7 +1168,7 @@ static void zprn_v1_routemod_handler(const char *const source_desc_c, const remo
   msg.zprn_cmd = ZPRN_ROUTEMOD;
   msg.zprn_un.route.dsta = dsta;
 
-  if(dsta == local_ip.s_addr) // a route to us is deleted (and we know we are here)
+  if(am_ii_addr(inner_addr_t(dsta))) // a route to us is deleted (and we know we are here)
     msg.zprn_prio = 0;
   else if(r && !r->empty()) // we have a route
     msg.zprn_prio = r->_routers.front().hops;
@@ -1273,7 +1318,7 @@ static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char 
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
   const auto local_router = make_shared<remote_peer_detail_t>();
 
-  if(have_local_ip && srca == local_router)
+  if(srca == local_router)
     if(const uint16_t dsum = IN_CKSUM(h_ip)) {
       printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
         h_ip->ip_sum, dsum);
@@ -1287,7 +1332,7 @@ static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
     print_packet(buffer, nread);
-  } else if(have_local_ip && h_ip->ip_src == local_ip) {
+  } else if(am_ii_addr(inner_addr_t(h_ip->ip_src.s_addr))) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
   } else if(zs_unlikely(nread != len)) {
     printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
@@ -1309,7 +1354,7 @@ static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv6 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
     print_packet(buffer, nread);
-  } else if(have_local_ip && am_ii_addr(inner_addr_t(h_ip->ip6_src))) {
+  } else if(am_ii_addr(inner_addr_t(h_ip->ip6_src))) {
     printf("ROUTER WARNING: drop ipv6 packet (looped with local as source)\n");
   } else {
     if(zs_unlikely(nread != len)) {
@@ -1427,7 +1472,6 @@ static bool do_epoll_add(const int epoll_fd, const int fd_to_add) {
 
 static void send_zprn_connmgmt_msg(const uint8_t prio) {
   // notify our peers that we are here
-  // FIXME: handle other AF_*, e.g. IPv6
   zprn_v2 msg;
   msg.zprn_cmd = ZPRN_CONNMGMT;
   msg.zprn_prio = prio;
@@ -1500,7 +1544,8 @@ int main(int argc, char *argv[]) {
 
   // add route to ourselves to avoid sending two 'ZPRN add route' packets
   const auto local_router = make_shared<remote_peer_detail_t>();
-  routes[inner_addr_t(local_ip.s_addr)].add_router(local_router, 0);
+  for(const auto &i : locals)
+    routes[i].add_router(local_router, 0);
 
   my_signal(SIGINT, do_shutdown);
   my_signal(SIGTERM, do_shutdown);
