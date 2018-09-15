@@ -108,6 +108,15 @@ xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept : inner_addr_t() {
 xner_addr_t::xner_addr_t(const inner_addr_t &o, const size_t pflen) noexcept
   : inner_addr_t(o) { set_pflen(pflen); }
 
+xner_addr_t::xner_addr_t(const sockaddr_storage &o, const sockaddr_storage &netmask) noexcept {
+  type = sa_family2iafa_at(o.ss_family);
+  const size_t oalen = pli_at2alen(type), difl = sizeof(addr) - oalen;
+  memcpy(addr, AFa_gp_addr(o), oalen);
+  memset(addr + oalen, 0, difl);
+  memcpy(nmsk, &netmask, oalen);
+  memset(nmsk + oalen, 0, difl);
+}
+
 // source: https://github.com/nmav/ipcalc/blob/master/ipcalc.c : ipv6_prefix_to_mask
 void xner_addr_t::set_pflen(const size_t pflen) noexcept {
   if(pflen > (sizeof(nmsk) * 8)) return;

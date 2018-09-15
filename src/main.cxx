@@ -37,9 +37,8 @@
 #include <sys/epoll.h> // linux-specific epoll
 #include <sys/prctl.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <fcntl.h>
-
-// TODO: use getifaddrs(3) #include <ifaddrs.h>
 
 // C++
 #include <unordered_map>
@@ -351,7 +350,32 @@ static bool init_all(const string &confpath) {
       for(const auto &i : addrs)
         runcmd("ip addr add '" + i + "'" + zs_devstr);
 
-      // TODO: use getifaddrs
+      // get interface addr's using getifaddrs
+      struct ifaddrs *ifa, *ifap;
+
+      if(getifaddrs(&ifap) == -1) {
+        perror("STARTUP ERROR: getifaddrs() failed");
+        return false;
+      }
+
+      for(ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        const sa_family_t sa_fam = ifa->ifa_addr->sa_family;
+        if(sa_fam == AF_PACKET || zprd_conf.iface != ifa->ifa_name)
+          continue;
+        locals.emplace_back(*reinterpret_cast<const struct sockaddr_storage*>(ifa->ifa_addr),
+                            *reinterpret_cast<const struct sockaddr_storage*>(ifa->ifa_netmask));
+        if(!locals.back().type) {
+          fprintf(stderr, "RUNTIME ERROR: got interface address with unsupported AF (%u)\n", static_cast<unsigned>(sa_fam));
+          locals.pop_back();
+        }
+      }
+
+      freeifaddrs(ifap);
+
+      if(locals.empty()) {
+        fprintf(stderr, "STARTUP ERROR: failed to get local endpoint information via getifaddrs()\n");
+        return false;
+      }
     }
 
     runcmd("ip link set" + zs_devstr + " mtu 1472");
