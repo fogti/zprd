@@ -73,7 +73,7 @@ bool remote_peer_t::set2catchall() noexcept {
       *SA_XXX_PTR(in6, addr) = in6addr_any;
       break;
 #endif
-/*    FIXME
+/*    FIXME -- low importance
     case AF_IPX:
       SA_XXX_PTR(ipx, addr) = ...IDK...;
       break;

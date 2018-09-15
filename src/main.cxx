@@ -251,7 +251,6 @@ static bool update_server_addr(remote_peer_detail_t &pdat) {
     pdat.locked_run([&remote](remote_peer_detail_t &o) {
       o.seen = last_time;
       o.set_saddr(remote, false);
-      o.set_port(zprd_conf.data_port, false);
     });
     return true;
   }
@@ -302,15 +301,14 @@ static bool init_all(const string &confpath) {
 
     // is used when we are root and see the 'U' setting in the conf to drop privilegis
     string run_as_user;
-
-    string addr_stmt, line;
+    string line;
+    vector<string> addrs;
     while(getline(in, line)) {
       if(line.empty() || line.front() == '#') continue;
       string arg = line.substr(1);
       switch(line.front()) {
         case 'A':
-          // FIXME: allow multiple A*-stmts, possible with different address families (AF_*)
-          addr_stmt = move(arg);
+          addrs.emplace_back(move(arg));
           break;
 
         case 'I':
@@ -351,32 +349,20 @@ static bool init_all(const string &confpath) {
 
     // NOTE: don't convert zprd_conf.data_port to big-endian; that's done in remote_peer_t::set_port
 
-    if(!addr_stmt.empty()) {
-      // TODO: ^^ see above, AF_*
-      const size_t marker = addr_stmt.find('/');
-      const string ip = addr_stmt.substr(0, marker);
-      const string cidrsf =
-        ((marker == string::npos)
-          ? "32"
-          : addr_stmt.substr(marker + 1));
+    const string zs_devstr = " dev '" + zprd_conf.iface + "'";
 
-      remote_peer_t rp_local;
-
-      if(!resolve_hostname(ip.c_str(), rp_local.saddr, AF_INET)) {
-        fprintf(stderr, "CONFIG ERROR: invalid 'A' statement: 'A%s'\n", addr_stmt.c_str());
-        return false;
-      }
-
-      local_ip = reinterpret_cast<struct sockaddr_in*>(&rp_local.saddr)->sin_addr;
+    if(!addrs.empty()) {
       have_local_ip = true;
-      local_netmask.s_addr = cidr_to_netmask(stoi(cidrsf));
 
       runcmd("ip addr flush '" + zprd_conf.iface + "'");
-      runcmd("ip addr add '" + addr_stmt + "' dev '" + zprd_conf.iface + "'");
+      for(const auto &i : addrs)
+        runcmd("ip addr add '" + i + "'" + zs_devstr);
+
+      // TODO: use getifaddrs
     }
 
-    runcmd("ip link set dev '" + zprd_conf.iface + "' mtu 1472");
-    runcmd("ip link set dev '" + zprd_conf.iface + "' up");
+    runcmd("ip link set" + zs_devstr + " mtu 1472");
+    runcmd("ip link set" + zs_devstr + " up");
 
 # undef runcmd
 
@@ -1085,7 +1071,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   // NOTE: h_icmp is only valid if is_icmp is true
   const auto h_icmp  = reinterpret_cast<const struct icmp6_hdr*>(buffer + sizeof(ip6_hdr));
 
-  
+  // TODO
 }
 
 static uint8_t get_ip_version(const char buffer[], const uint16_t len) {
@@ -1110,7 +1096,10 @@ static void route_genip_packet(const remote_peer_detail_ptr_t &source_peer, char
 
 // is inner_addr:o a local ip?
 static bool am_ii_addr(const inner_addr_t &o) noexcept {
-  return o == inner_addr_t(local_ip.s_addr);
+  for(const auto &i : locals)
+    if(*reinterpret_cast<const inner_addr_t *>(&i) == o)
+      return true;
+  return false;
 }
 
 // handlers for incoming ZPRN packets
@@ -1279,7 +1268,8 @@ static bool handle_zprn_pkt(const remote_peer_detail_ptr_t &srca, char buffer[],
   }
 }
 
-static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const uint16_t nread, const char *source_desc_c) {
+static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
+  const uint16_t nread = len;
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
   const auto local_router = make_shared<remote_peer_detail_t>();
 
@@ -1309,7 +1299,27 @@ static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char 
   return false;
 }
 
-// FIXME: add verify_ipv6_packet
+static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
+  const uint16_t nread = len;
+  const auto h_ip = reinterpret_cast<const struct ip6_hdr*>(buffer);
+
+  // get total length
+  len = ntohs(h_ip->ip6_plen) + sizeof(struct ip6_hdr);
+
+  if(zs_unlikely(nread < len)) {
+    printf("ROUTER ERROR: can't read whole ipv6 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
+    print_packet(buffer, nread);
+  } else if(have_local_ip && am_ii_addr(inner_addr_t(h_ip->ip6_src))) {
+    printf("ROUTER WARNING: drop ipv6 packet (looped with local as source)\n");
+  } else {
+    if(zs_unlikely(nread != len)) {
+      printf("ROUTER WARNING: ipv6 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
+      print_packet(buffer, nread);
+    }
+    return true;
+  }
+  return false;
+}
 
 /** read_packet
  * reads an variable length packet
@@ -1343,15 +1353,14 @@ static bool verify_packet(const remote_peer_detail_ptr_t &srca, char buffer[], u
     case 4:
       if(sizeof(struct ip) > len)
         goto length_error;
-      return verify_ipv4_packet(srca, buffer, len, len, source_desc_c);
+      return verify_ipv4_packet(srca, buffer, len, source_desc_c);
 
     case 6:
       if(sizeof(struct ip6_hdr) > len)
         goto length_error;
-      // FIXME: handle AF_INET6
+      return verify_ipv6_packet(srca, buffer, len, source_desc_c);
 
     default:
-      // FIXME: handle other AF_*
       printf("ROUTER ERROR: received a packet with unknown payload type (wrong ip_ver = %u) from %s\n", ipver, source_desc_c);
   }
   return false;

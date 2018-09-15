@@ -48,10 +48,17 @@ inner_addr_t::inner_addr_t(const struct sockaddr_storage &o) noexcept {
 }
 
 inner_addr_t::inner_addr_t(const uint32_t ip4a) noexcept : type(IAFA_AT_INET) {
-  constexpr const size_t ip4alen = sizeof(ip4a);
-  static_assert(ip4alen == pli_at2alen(IAFA_AT_INET));
-  memcpy(addr, &ip4a, sizeof(ip4a));
-  memset(addr + ip4alen, 0, sizeof(addr) - ip4alen);
+  constexpr const size_t ipalen = sizeof(ip4a);
+  static_assert(ipalen == pli_at2alen(IAFA_AT_INET));
+  memcpy(addr, &ip4a, ipalen);
+  memset(addr + ipalen, 0, sizeof(addr) - ipalen);
+}
+
+inner_addr_t::inner_addr_t(const in6_addr ip6a) noexcept : type(IAFA_AT_INET6) {
+  constexpr const size_t ipalen = sizeof(ip6a);
+  static_assert(ipalen == pli_at2alen(IAFA_AT_INET6));
+  memcpy(addr, &ip6a, ipalen);
+  memset(addr + ipalen, 0, sizeof(addr) - ipalen);
 }
 
 size_t inner_addr_t::get_alen() const noexcept {

@@ -7,6 +7,7 @@
 #pragma once
 #include <config.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <inttypes.h>
 #include <stddef.h>     // size_t
 #include <string>
@@ -39,6 +40,9 @@ struct inner_addr_t final {
 
   // convert from IPv4 address
   explicit inner_addr_t(const uint32_t ip4a) noexcept;
+
+  // convert from IPv6 address
+  explicit inner_addr_t(const in6_addr ip6a) noexcept;
 
   size_t get_alen() const noexcept;
   // tflen = actual needed length of type + char[get_alen()]
