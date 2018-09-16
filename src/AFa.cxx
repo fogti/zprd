@@ -5,16 +5,13 @@
  * License: GPL-2+
  **/
 #include "AFa.hpp"
-
 #include <config.h>
-#include <zprd_conf.hpp>
 
-#include <stdio.h>
 #include <arpa/inet.h>
-#include <endian.h>
-#include <string.h>
+#include <string.h> // memcmp
 
 #ifdef USE_IPX
+# include <stdio.h>
 # include <netipx/ipx.h>
 #endif
 
@@ -83,6 +80,10 @@ GP_TEMPLATE(port, uint16_t)
 
 using std::string;
 
+static string ui162string(const uint16_t x) {
+  return std::to_string(static_cast<unsigned>(x));
+}
+
 auto AFa_addr2string(const sa_family_t sa_fam, const char *addr) -> string {
   if(!addr) return "(null)";
 
@@ -98,18 +99,18 @@ auto AFa_addr2string(const sa_family_t sa_fam, const char *addr) -> string {
         ;
       inet_ntop(sa_fam, addr, buf, sizeof(buf));
       break;
-/*
+#ifdef USE_IPX
     case AF_IPX:
       snprintf(buf, sizeof(buf), "%s", ipx_ntoa(*addr));
       break;
- */
+#endif
     default:
-      return "-unsupported-AF-" + std::to_string(sa_fam);
+      return "-unsupported-AF-" + ui162string(sa_fam);
   }
 
   return {buf};
 }
 
 auto AFa_port2string(const sa_family_t sa_fam, const uint16_t *sanport) -> string {
-  return std::to_string(ntohs(*sanport));
+  return ui162string(ntohs(*sanport));
 }

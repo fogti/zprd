@@ -4,12 +4,7 @@
  * License: GPL-2+
  **/
 #pragma once
-#include <forward_list>
-#include <functional>
-#include <tuple>
-
 #include "remote_peer.hpp"
-#include "zprd_conf.hpp"
 
 extern time_t last_time;
 
@@ -21,6 +16,9 @@ struct via_router_t final {
 
   via_router_t(const remote_peer_ptr_t &_addr, const uint8_t _hops) noexcept;
 };
+
+#include <forward_list>
+#include <functional>
 
 // collection of via_route_t's
 class route_via_t final {

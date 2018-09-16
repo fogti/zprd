@@ -5,7 +5,6 @@
  **/
 
 #include "remote_peer.hpp"
-#include <utility>
 
 extern time_t last_time;
 

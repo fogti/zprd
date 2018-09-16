@@ -6,11 +6,9 @@
 
 #define __USE_MISC 1
 #include "resolve.hpp"
-
-#include <stdio.h>
+#include <stdio.h>  // printf
 #include <string.h> // memset
-#include <netdb.h> // getaddrinfo
-#include <netinet/in.h>
+#include <netdb.h>  // getaddrinfo
 
 bool resolve_hostname(const char * const hostname, struct sockaddr_storage &remote, const sa_family_t preferred_af) noexcept {
   struct addrinfo hints, *servinfo;

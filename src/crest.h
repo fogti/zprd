@@ -5,7 +5,6 @@
  **/
 #pragma once
 #include <inttypes.h>
-#include <signal.h>
 #include <cwa_noexcept.h>
 #ifdef __cplusplus
 extern "C" {

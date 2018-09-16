@@ -8,11 +8,9 @@
 #include "remote_peer.hpp"
 #include "AFa.hpp"
 #include <config.h>
-#include <zprd_conf.hpp>
 
 #include <stdio.h>
-#include <arpa/inet.h>
-#include <endian.h>
+#include <arpa/inet.h> // sockaddr_in, INADDR_ANY, in6addr_any
 #include <string.h>
 
 remote_peer_t::remote_peer_t() noexcept
@@ -73,11 +71,13 @@ bool remote_peer_t::set2catchall() noexcept {
       *SA_XXX_PTR(in6, addr) = in6addr_any;
       break;
 #endif
-/*    FIXME -- low importance
+#ifdef USE_IPX
+# error "IPX is not supported in remote_peer_t::set2catchall"
+//    FIXME -- low importance
     case AF_IPX:
       SA_XXX_PTR(ipx, addr) = ...IDK...;
       break;
- */
+#endif
     default:
       break;
   }

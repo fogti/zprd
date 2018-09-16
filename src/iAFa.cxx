@@ -136,6 +136,7 @@ void xner_apply_netmask(char * addr, const char * nmsk, const size_t cmplen) noe
 
 #include <zs/ll/hash.hpp>
 
+[[gnu::hot]]
 size_t inner_addr_hash::operator()(const inner_addr_t &addr) const noexcept {
   uintmax_t seed = 0;
   llzs::hash_combine(seed, addr.type);

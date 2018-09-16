@@ -9,7 +9,6 @@
  *      The Regents of the University of California.  All rights reserved.
  **/
 
-#include "config.h"
 #include "crest.h"
 
 uint16_t __attribute__((hot)) in_cksum(const uint16_t *ptr, int nbytes) noexcept {

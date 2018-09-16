@@ -4,9 +4,9 @@
  * License: GPL-2+
  **/
 
-#include <time.h>
-#include <tuple>
 #include "ping_cache.hpp"
+#include <time.h>
+#include <tuple>  // std::tie
 
 // TODO: handle failure of clock_gettime
 double ping_cache_t::get_ms_time() noexcept {

@@ -22,42 +22,33 @@
  **/
 
 #define __USE_MISC 1
-#include <grp.h>    // struct group
-#include <pwd.h>    // struct passwd
-#include <ctype.h>
+#include <sys/types.h>
+#include <grp.h>              // struct group
+#include <pwd.h>              // struct passwd
 #include <stdio.h>
-#include <string.h>
+#include <signal.h>           // SIG*
 #include <unistd.h>
 #include <net/if.h>
-#include <netinet/ip_icmp.h>
-#include <netinet/ip6.h>
-#include <netinet/icmp6.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/epoll.h> // linux-specific epoll
+#include <netinet/ip_icmp.h>  // struct ip, ICMP_*
+#include <netinet/ip6.h>      // struct ip6_hdr
+#include <netinet/icmp6.h>    // struct icmp6_hdr
+#include <sys/epoll.h>        // linux-specific epoll
 #include <sys/prctl.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
-#include <fcntl.h>
+#include <fcntl.h>            // O_* S_*
 
 // C++
-#include <unordered_map>
-#include <fstream>
-#include <algorithm>
-#include <functional>
-#include <utility>
-
 #include <atomic>
+#include <fstream>
 #include <thread>
-#include <condition_variable>
+#include <unordered_map>
 
 // own parts
 #include <config.h>
-#include <addr.hpp>
 #include "crest.h"
 #include "crw.h"
 #include "AFa.hpp"
-#include "iAFa.hpp"
 #include "ping_cache.hpp"
 #include "remote_peer.hpp"
 #include "resolve.hpp"
@@ -493,6 +484,7 @@ static string get_remote_desc(const remote_peer_ptr_t &addr) {
   );
 }
 
+[[gnu::hot]]
 static bool x_less(const remote_peer_ptr_t &a, const remote_peer_ptr_t &b) {
   return (*a) < (*b);
 }
@@ -718,6 +710,7 @@ void sender_t::stop() noexcept {
 }
 
 // is inner_addr:o a local ip?
+[[gnu::hot]]
 static bool am_ii_addr(const inner_addr_t &o) noexcept {
   for(const auto &i : locals)
     if(*reinterpret_cast<const inner_addr_t *>(&i) == o)
@@ -725,6 +718,7 @@ static bool am_ii_addr(const inner_addr_t &o) noexcept {
   return false;
 }
 
+[[gnu::hot]]
 static auto get_local_aptr(const iafa_at_t preferred_at) noexcept -> const xner_addr_t* {
   for(const auto &i : locals) {
     if(i.type != preferred_at)

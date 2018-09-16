@@ -19,16 +19,16 @@
  * explicit. See the file LICENSE for further details.
  **/
 
+#include "crw.h"
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <net/if.h> // ifreq, IFNAMSIZ
 #include <stdio.h>
 #include <stdlib.h> // exit
 #include <string.h>
 #include <errno.h>
-#include <unistd.h>
-#include <net/if.h> // ifreq, IFNAMSIZ
-#include <sys/types.h>
-#include <sys/ioctl.h>
+#include <unistd.h> // close, read
 #include <fcntl.h>  // O_RDWR
-#include "crw.h"
 
 int tun_alloc(char *dev, const int flags) {
   struct ifreq ifr;

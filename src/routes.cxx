@@ -4,34 +4,13 @@
  * License: GPL-2+
  **/
 
-#include <algorithm>
 #include "routes.hpp"
-#include <config.h>
+#include <config.h> // zs_*likely
 
 using namespace std;
 
 via_router_t::via_router_t(const remote_peer_ptr_t &_addr, const uint8_t _hops) noexcept
   : addr(_addr), seen(last_time), latency(0), hops(_hops) { }
-
-// deletes all outdates routers and sort routers
-void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &f) {
-  const auto ct = last_time - 2 * zprd_conf.remote_timeout;
-  _routers.remove_if(
-    [ct,&f](const via_router_t &a) {
-      if(ct < a.seen) return false;
-      f(a.addr);
-      return true;
-    }
-  );
-
-  _routers.sort(
-    // place best router in front: low hops, low latency, recent seen
-    // priority high to low: hop count > latency > seen time
-    [](const via_router_t &a, const via_router_t &b) noexcept {
-      return std::tie(a.hops, a.latency, b.seen) < std::tie(b.hops, b.latency, a.seen);
-    }
-  );
-}
 
 [[gnu::hot]]
 auto route_via_t::find_router(const remote_peer_ptr_t &router) noexcept -> decltype(_routers)::iterator {
@@ -119,4 +98,26 @@ bool route_via_t::del_router(const remote_peer_ptr_t &router) noexcept {
     }
   );
   return ret;
+}
+
+#include <zprd_conf.hpp>
+
+// deletes all outdates routers and sort routers
+void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &f) {
+  const auto ct = last_time - 2 * zprd_conf.remote_timeout;
+  _routers.remove_if(
+    [ct,&f](const via_router_t &a) {
+      if(ct < a.seen) return false;
+      f(a.addr);
+      return true;
+    }
+  );
+
+  _routers.sort(
+    // place best router in front: low hops, low latency, recent seen
+    // priority high to low: hop count > latency > seen time
+    [](const via_router_t &a, const via_router_t &b) noexcept {
+      return std::tie(a.hops, a.latency, b.seen) < std::tie(b.hops, b.latency, a.seen);
+    }
+  );
 }

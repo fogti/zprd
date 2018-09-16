@@ -7,6 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(USE_IPV6 "enable outer IPv6 support" ON)
+option(USE_IPX  "enable AFa IPX support" OFF)
 
 find_package(Threads REQUIRED)
 find_package(LowlevelZS REQUIRED)
@@ -31,6 +32,10 @@ add_executable(zprd src/main.cxx src/cksum.c src/crw.c src/ping_cache.cxx
                     src/AFa.cxx src/iAFa.cxx src/remote_peer.cxx src/remote_peer_detail.cxx
                     src/resolve.cxx src/routes.cxx src/zprn.cxx)
 target_link_libraries(zprd Threads::Threads LowlevelZS::lowlevelzs)
+
+if(USE_IPX)
+  target_link_libraries(zprd -lipx)
+endif()
 
 function(src_compile_flags flag)
   set_property(SOURCE ${ARGN} APPEND_STRING PROPERTY COMPILE_FLAGS " ${flag}")

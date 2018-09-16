@@ -5,11 +5,10 @@
  * License: GPL-2+
  **/
 #pragma once
+#include <sys/socket.h>
 #include <inttypes.h>
 #include <stddef.h>     // size_t
 #include <string>
-
-#include <sys/socket.h>
 
 // sockaddr_* sa_family funcs
 size_t AFa_sa_family2size(const struct sockaddr_storage &sas) noexcept;
