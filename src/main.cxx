@@ -1135,23 +1135,24 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
 
   // am I an endpoint
   const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(iaddr_dst));
+  auto &hops = h_ip->ip6_hops;
 
   // we can use the ttl directly, it is 1 byte long
-  if((!h_ip->ip6_hops) || (!iam_ep && h_ip->ip6_hops == 1)) {
+  if((!hops) || (!iam_ep && hops == 1)) {
     // ttl is too low -> DROP
-    printf("ROUTER: drop packet (too low ttl = %u) from %s\n", h_ip->ip6_hops, source_desc_c);
+    printf("ROUTER: drop packet (too low ttl = %u) from %s\n", hops, source_desc_c);
     if(!is_icmp_errmsg)
       send_icmp6_msg(ZICMPM_TTL, h_ip, source_peer);
     return;
   }
 
   // decrement ttl
-  if(!iam_ep) --(h_ip->ip6_hops);
+  if(!iam_ep) --(hops);
 
   // update routes
   if(routes[iaddr_src].add_router(
       source_peer,
-      am_ii_addr(iaddr_src) ? 0 : (MAXTTL - h_ip->ip6_hops)
+      am_ii_addr(iaddr_src) ? 0 : (MAXTTL - hops)
   )) {
     const string srcnam = helper_ip6a2string(ip_src);
     printf("ROUTER: add route to %s via %s\n", srcnam.c_str(), source_desc_c);
@@ -1215,8 +1216,29 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
           if(!r->empty()) return;
         }
       }
+    } else if(ret.size() == 1) {
+      /** evaluate ping packets to determine the latency of this route
+       *  echoreply : source and destination are swapped
+       **/
+      const ping_cache_t::data_t edat(iaddr_src, iaddr_dst, h_icmp->icmp6_id, h_icmp->icmp6_seq);
+      // TODO: handle pings
+      switch(h_icmp->icmp6_type) {
+        case 0x80:
+          ping_cache.init(edat, ret.front());
+          break;
+
+        case 0x81:
+          {
+            const auto m = ping_cache.match(edat, source_peer, hops);
+            if(m.match)
+              if(const auto r = have_route(edat.src))
+                r->update_router(m.router, m.hops, m.diff);
+          }
+          break;
+
+        default: break;
+      }
     }
-    // TODO: handle pings
   }
 
   sender.enqueue({{buffer, buffer + buflen}, move(ret), htons(IP_DF),
