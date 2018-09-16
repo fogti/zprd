@@ -4,6 +4,7 @@
  */
 #pragma once
 #cmakedefine USE_IPV6
+#cmakedefine USE_IPX
 #cmakedefine HAVE_BUILTIN_EXPECT
 #cmakedefine HAVE_ATTRIB_PURE
 #ifdef HAVE_BUILTIN_EXPECT

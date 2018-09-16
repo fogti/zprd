@@ -7,7 +7,6 @@
 
 #include "remote_peer.hpp"
 #include "AFa.hpp"
-#include <config.h>
 
 #include <stdio.h>
 #include <arpa/inet.h> // sockaddr_in, INADDR_ANY, in6addr_any
@@ -57,34 +56,6 @@ void remote_peer_t::set_saddr(const sockaddr_storage &sas, const bool do_lock) n
     memcpy(&saddr, &sas, sizeof(saddr));
   }
 }
-
-#define SA_XXX_PTR(PROTO,WHAT) (&reinterpret_cast<struct sockaddr_##PROTO*>(&saddr)->s##PROTO##_##WHAT)
-
-// used by src/main.cxx:setup_server_fd
-bool remote_peer_t::set2catchall() noexcept {
-  switch(saddr.ss_family) {
-    case AF_INET:
-      SA_XXX_PTR(in, addr)->s_addr = htonl(INADDR_ANY);
-      break;
-#ifdef USE_IPV6
-    case AF_INET6:
-      *SA_XXX_PTR(in6, addr) = in6addr_any;
-      break;
-#endif
-#ifdef USE_IPX
-# error "IPX is not supported in remote_peer_t::set2catchall"
-//    FIXME -- low importance
-    case AF_IPX:
-      SA_XXX_PTR(ipx, addr) = ...IDK...;
-      break;
-#endif
-    default:
-      break;
-  }
-  return true;
-}
-
-#undef SA_XXX_PTR
 
 void remote_peer_t::set_port(const uint16_t port, const bool do_lock) noexcept {
   if(do_lock) {

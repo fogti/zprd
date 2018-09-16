@@ -43,8 +43,34 @@ int AFa_sa_compare(const struct sockaddr_storage &lhs, const struct sockaddr_sto
   return memcmp(&lhs + offset, &rhs + offset, cmpsiz);
 }
 
+#define SA_XXX_PTR(PROTO,WHAT) (&reinterpret_cast<struct sockaddr_##PROTO*>(&sas)->s##PROTO##_##WHAT)
+
+bool AFa_sa2catchall(struct sockaddr_storage &sas) noexcept {
+  switch(sas.ss_family) {
+    case AF_INET:
+      SA_XXX_PTR(in, addr)->s_addr = htonl(INADDR_ANY);
+      break;
+#ifdef USE_IPV6
+    case AF_INET6:
+      *SA_XXX_PTR(in6, addr) = in6addr_any;
+      break;
+#endif
+#ifdef USE_IPX
+    case AF_IPX:
+# warning "IPX is not supported in AFa_sa2catchall"
+//    FIXME -- low importance
+      //SA_XXX_PTR(ipx, addr) = ...IDK...;
+      //break;
+#endif
+    default:
+      return false;
+  }
+  return true;
+}
+
 // sockaddr_* get pointer funcs
 
+#undef SA_XXX_PTR
 #define SA_XXX_PTR(PROTO,WHAT) (&reinterpret_cast<const struct sockaddr_##PROTO*>(&sas)->s##PROTO##_##WHAT)
 #define X_CASE_X(AFX,PROTO,WHAT,TYPE) case AF_##AFX: return reinterpret_cast<const TYPE*>(SA_XXX_PTR(PROTO, WHAT));
 #ifdef USE_IPV6

@@ -201,7 +201,7 @@ static bool setup_server_fd(const sa_family_t sa_family) {
   // use remote_peer_t as abstraction layer + helper
   ss.ss_family = sa_family;
   local_pt.set_port(zprd_conf.data_port, false);
-  if(!local_pt.set2catchall()) {
+  if(!AFa_sa2catchall(local_pt.saddr)) {
     fprintf(stderr, "STARTUP ERROR: setup_server_fd: unsupported address family %u\n", static_cast<unsigned>(sa_family));
     goto error;
   }

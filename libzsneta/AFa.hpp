@@ -14,6 +14,9 @@
 size_t AFa_sa_family2size(const struct sockaddr_storage &sas) noexcept;
 int AFa_sa_compare(const struct sockaddr_storage &lhs, const struct sockaddr_storage &rhs) noexcept;
 
+// AFa_sa2catchall sets sas to the use-all-interfaces-catchall address
+bool AFa_sa2catchall(struct sockaddr_storage &sas) noexcept;
+
 // sockaddr_* get pointer funcs
 const char    * AFa_gp_addr(const struct sockaddr_storage &sas) noexcept;
       char    * AFa_gp_addr(      struct sockaddr_storage &sas) noexcept;
