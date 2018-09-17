@@ -47,6 +47,7 @@
 // own parts
 #include <config.h>
 #include "AFa.hpp"
+#include "backtrace.h"
 #include "crest.h"
 #include "crw.h"
 #include "ping_cache.hpp"
@@ -1431,6 +1432,9 @@ int main(int argc, char *argv[]) {
   for(const auto &i : locals)
     routes[i].add_router(local_router, 0);
 
+#ifdef USE_DEBUG
+  setup_sigsegv_handler();
+#endif
   my_signal(SIGINT, do_shutdown);
   my_signal(SIGTERM, do_shutdown);
 

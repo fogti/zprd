@@ -5,8 +5,10 @@
 #pragma once
 #cmakedefine USE_IPV6
 #cmakedefine USE_IPX
+#cmakedefine USE_DEBUG
 #cmakedefine HAVE_BUILTIN_EXPECT
 #cmakedefine HAVE_ATTRIB_PURE
+#cmakedefine HAVE_WK_UCONTEXT_H
 #ifdef HAVE_BUILTIN_EXPECT
 # define zs_likely(x)   __builtin_expect(!!(x), 1)
 # define zs_unlikely(x) __builtin_expect(!!(x), 0)

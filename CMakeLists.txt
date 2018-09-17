@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(USE_IPV6 "enable outer IPv6 support" ON)
 option(USE_IPX  "enable AFa IPX support" OFF)
+option(USE_DEBUG "enable debug support" OFF)
 
 find_package(Threads REQUIRED)
 find_package(LowlevelZS REQUIRED)
@@ -26,7 +27,19 @@ check_c_source_compiles(
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
 include_directories(libzsneta src include "${PROJECT_BINARY_DIR}")
 
-set(Z_COMMON_C_FLAGS "-fno-plt -ftree-vectorize -fno-unwind-tables -fno-asynchronous-unwind-tables")
+set(Z_COMMON_C_FLAGS "-fno-plt -ftree-vectorize")
+
+if(USE_DEBUG)
+  # generate relevant debug symbols and backtraces
+  set(Z_COMMON_C_FLAGS "${Z_COMMON_C_FLAGS} -g")
+  check_c_source_compiles("#include <${PROJECT_SOURCE_DIR}/tests/ucontext.c>" HAVE_WK_UCONTEXT_H)
+  if(NOT HAVE_WK_UCONTEXT_H)
+    message(WARNING "no working ucontext.h found --> SIGSEGV backtrace not available")
+  endif()
+else()
+  set(Z_COMMON_C_FLAGS "${Z_COMMON_C_FLAGS} -fno-unwind-tables -fno-asynchronous-unwind-tables")
+endif()
+
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   ${Z_COMMON_C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${Z_COMMON_C_FLAGS} -fno-rtti -fno-exceptions")
 
@@ -40,8 +53,8 @@ endif()
 install(TARGETS zsneta DESTINATION "${INSTALL_LIB_DIR}")
 install(FILES libzsneta/AFa.hpp libzsneta/iAFa.hpp DESTINATION "${INSTALL_INCLUDE_DIR}/libzsneta")
 
-add_executable(zprd src/main.cxx src/cksum.c src/crw.c src/ping_cache.cxx
-                    src/remote_peer.cxx src/remote_peer_detail.cxx
+add_executable(zprd src/main.cxx src/backtrace.c src/cksum.c src/crw.c
+                    src/ping_cache.cxx src/remote_peer.cxx src/remote_peer_detail.cxx
                     src/resolve.cxx src/routes.cxx src/sender.cxx src/zprn.cxx)
 target_link_libraries(zprd Threads::Threads zsneta)
 
