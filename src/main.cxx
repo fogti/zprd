@@ -275,6 +275,8 @@ static bool init_all(const string &confpath) {
       }
 
       for(ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if(!ifa->ifa_addr || !ifa->ifa_netmask || !ifa->ifa_name)
+          continue;
         const sa_family_t sa_fam = ifa->ifa_addr->sa_family;
         if(sa_fam == AF_PACKET || zprd_conf.iface != ifa->ifa_name)
           continue;
@@ -867,6 +869,10 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   const inner_addr_t iaddr_src(ip_src);
   const inner_addr_t iaddr_dst(ip_dst);
 
+  // [TODO?] currently: discard IPv6 multicast packets (as we do in IPv4, too)
+  if(IN6_IS_ADDR_MULTICAST(ip_dst.s6_addr))
+    return;
+
   // am I an endpoint
   const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(iaddr_dst));
   auto &hops = h_ip->ip6_hops;
@@ -1164,7 +1170,7 @@ static bool handle_zprn_v2_pkt(const remote_peer_detail_ptr_t &srca, char buffer
   };
 
   const auto h_zprn = reinterpret_cast<const struct zprn_v2hdr*>(buffer);
-  if(!((sizeof(struct zprn_v2hdr) + sizeof(struct zprn_v2)) < len && h_zprn->valid()))
+  if(!((sizeof(struct zprn_v2hdr) + 2) < len && h_zprn->valid()))
     return false;
 
   char *bptr = buffer + sizeof(struct zprn_v2hdr);
@@ -1190,20 +1196,22 @@ static bool handle_zprn_v2_pkt(const remote_peer_detail_ptr_t &srca, char buffer
 }
 
 static bool handle_zprn_pkt(const remote_peer_detail_ptr_t &srca, char buffer[], const uint16_t len, const char * const __restrict__ source_desc_c) {
-  if(len < 4 || buffer[0]) return false;
+  if(len < 4 || buffer[0])
+    return false;
   switch(buffer[1]) {
     case 1: return handle_zprn_v1_pkt(srca, buffer, len, source_desc_c);
     case 2: return handle_zprn_v2_pkt(srca, buffer, len, source_desc_c);
-    default: return false;
+    default:
+      return false;
   }
 }
 
 static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
   const uint16_t nread = len;
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
-  const auto local_router = make_shared<remote_peer_detail_t>();
+  const bool srca_is_local = (*srca == remote_peer_detail_t());
 
-  if(srca == local_router)
+  if(srca_is_local)
     if(const uint16_t dsum = IN_CKSUM(h_ip)) {
       printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
         h_ip->ip_sum, dsum);
@@ -1217,7 +1225,7 @@ static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
     print_packet(buffer, nread);
-  } else if(am_ii_addr(inner_addr_t(h_ip->ip_src.s_addr))) {
+  } else if(zs_unlikely(!srca_is_local && am_ii_addr(inner_addr_t(h_ip->ip_src.s_addr)))) {
     printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
   } else if(zs_unlikely(nread != len)) {
     printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
@@ -1239,7 +1247,7 @@ static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv6 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
     print_packet(buffer, nread);
-  } else if(am_ii_addr(inner_addr_t(h_ip->ip6_src))) {
+  } else if(zs_unlikely(*srca != remote_peer_detail_t() && am_ii_addr(inner_addr_t(h_ip->ip6_src)))) {
     printf("ROUTER WARNING: drop ipv6 packet (looped with local as source)\n");
   } else {
     if(zs_unlikely(nread != len)) {
@@ -1368,6 +1376,9 @@ static void send_zprn_connmgmt_msg(const uint8_t prio) {
 }
 
 int main(int argc, char *argv[]) {
+#ifdef USE_DEBUG
+  setup_sigsegv_handler();
+#endif
   { // parse command line
     string confpath = "/etc/zprd.conf";
     for(int i = 0; i < argc; ++i) {
@@ -1432,9 +1443,6 @@ int main(int argc, char *argv[]) {
   for(const auto &i : locals)
     routes[i].add_router(local_router, 0);
 
-#ifdef USE_DEBUG
-  setup_sigsegv_handler();
-#endif
   my_signal(SIGINT, do_shutdown);
   my_signal(SIGTERM, do_shutdown);
 

@@ -72,9 +72,12 @@ extern int local_fd;
 extern unordered_map<sa_family_t, int> server_fds;
 
 void sender_t::worker_fn() noexcept {
-  static const auto sendto_peer = [](const remote_peer_ptr_t &i, const char * const buf, const size_t buflen) noexcept -> bool {
+  // create a backup
+  const auto my_server_fds = server_fds;
+
+  const auto sendto_peer = [&my_server_fds](const remote_peer_ptr_t &i, const char * const buf, const size_t buflen) noexcept -> bool {
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
-      if(sendto(server_fds[o.saddr.ss_family], buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
+      if(sendto(my_server_fds.at(o.saddr.ss_family), buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
         perror("sendto()");
         return false;
       }
@@ -87,16 +90,16 @@ void sender_t::worker_fn() noexcept {
   bool df = false;
   uint8_t tos = 0;
 
-  const auto set_df = [&df](const bool cdf) noexcept {
+  const auto set_df = [&](const bool cdf) noexcept {
     const int tmp_df = cdf
 # if defined(IP_DONTFRAG)
       ;
-    if(setsockopt(server_fds[AF_INET], IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_DONTFRAG) failed");
+    if(setsockopt(my_server_fds.at(AF_INET), IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
+      perror("SENDER WARNING: setsockopt(IP_DONTFRAG) failed");
 # elif defined(IP_MTU_DISCOVER)
       ? IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
-    if(setsockopt(server_fds[AF_INET], IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
+    if(setsockopt(my_server_fds.at(AF_INET), IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
+      perror("SENDER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
 # else
 #  warning "set_ip_df: no method available to manage the dont-frag bit"
       ;
@@ -105,9 +108,9 @@ void sender_t::worker_fn() noexcept {
     else df = cdf;
   };
 
-  const auto set_tos = [&tos](const uint8_t ctos) noexcept {
-    if(setsockopt(server_fds[AF_INET], IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
-      perror("ROUTER WARNING: setsockopt(IP_TOS) failed");
+  const auto set_tos = [&](const uint8_t ctos) noexcept {
+    if(setsockopt(my_server_fds.at(AF_INET), IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
+      perror("SENDER WARNING: setsockopt(IP_TOS) failed");
     else tos = ctos;
   };
 
@@ -199,7 +202,7 @@ void sender_t::worker_fn() noexcept {
       }
       const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
       for(const auto &dest : i.dests) {
-        auto bufitem = zprn_buf.try_emplace(dest, zprn_hdrv).first->second;
+        auto &bufitem = zprn_buf.try_emplace(dest, zprn_hdrv).first->second;
         bufitem.reserve(bufitem.size() + zmsiz);
         bufitem.insert(bufitem.end(), zmbeg, zmend);
       }
@@ -213,6 +216,9 @@ void sender_t::worker_fn() noexcept {
         got_error = true;
 
     zprn_buf.clear();
-    if(got_error) fflush(stderr);
+    if(got_error) {
+      fflush(stdout);
+      fflush(stderr);
+    }
   }
 }
