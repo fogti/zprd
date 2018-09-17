@@ -102,7 +102,7 @@ bool route_via_t::del_router(const remote_peer_ptr_t &router) noexcept {
 
 #include <zprd_conf.hpp>
 
-// deletes all outdates routers and sort routers
+// deletes all outdated routers and sort routers
 void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &f) {
   const auto ct = last_time - 2 * zprd_conf.remote_timeout;
   _routers.remove_if(

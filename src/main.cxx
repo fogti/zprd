@@ -284,7 +284,7 @@ static bool init_all(const string &confpath) {
     zprd_conf.remote_timeout = 600;   // T600   = 10 min
     zprd_conf.preferred_af   = AF_UNSPEC;
 
-    // is used when we are root and see the 'U' setting in the conf to drop privilegis
+    // is used when we are root and see the 'U' setting in the conf to drop privileges
     string run_as_user;
     string line;
     vector<string> addrs;
@@ -438,6 +438,7 @@ static bool init_all(const string &confpath) {
 
   chdir("/");
   // last_time must be set before any call to routing classes happen
+  //  e.g. to remotes or routes
   srand((last_time = time(nullptr)));
 
   {
@@ -454,7 +455,7 @@ static bool init_all(const string &confpath) {
     return false;
   }
 
-  // prepare server
+  // prepare server fd's
   if(!setup_server_fd(AF_INET))
     return false;
 
@@ -517,17 +518,17 @@ static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &it
   return true;
 }
 
-static bool sendto_peer(const remote_peer_ptr_t &i, const char * const buf, const size_t buflen) noexcept {
-  return i->locked_crun([&](const remote_peer_t &o) noexcept {
-    if(sendto(server_fds[o.saddr.ss_family], buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
-      perror("sendto()");
-      return false;
-    }
-    return true;
-  });
-}
-
 void sender_t::worker_fn() noexcept {
+  static const auto sendto_peer = [](const remote_peer_ptr_t &i, const char * const buf, const size_t buflen) noexcept -> bool {
+    return i->locked_crun([&](const remote_peer_t &o) noexcept {
+      if(sendto(server_fds[o.saddr.ss_family], buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
+        perror("sendto()");
+        return false;
+      }
+      return true;
+    });
+  };
+
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
 
   bool df = false;

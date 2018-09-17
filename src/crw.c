@@ -66,7 +66,7 @@ int cread(const int fd, char *buf, const size_t n) {
 
 // additional functions needed for work with UDP
 
-// TODO: handle ICMP errmsg's with IP_RECVERR and recvmsg MSG_ERRQUEUE
+// TODO: handle ICMP errmsg's with setsockopt IP_RECVERR and recvmsg MSG_ERRQUEUE
 //       ex look @ https://stackoverflow.com/questions/11914568/read-icmp-payload-from-a-recvmsg-with-msg-errqueue-flag
 int recv_n(const int fd, char * __restrict__ buf, const size_t n, struct sockaddr_storage * __restrict__ addr) {
   while(1) {
