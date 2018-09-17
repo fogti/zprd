@@ -145,15 +145,18 @@ static bool setup_server_fd(const sa_family_t sa_family) {
 }
 
 static void connect2server(const string &r, const size_t cent) {
-  struct sockaddr_storage remote;
+  auto ptr = make_shared<remote_peer_detail_t>();
+  struct sockaddr_storage &remote = ptr->saddr;
   memset(&remote, 0, sizeof(remote));
-  if(!resolve_hostname(r.c_str(), remote, zprd_conf.preferred_af))
+  if(!resolve_hostname(r, remote, zprd_conf.preferred_af))
     return;
-  auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
+  ptr->cent = cent;
   ptr->set_port_if_unset(zprd_conf.data_port, false);
-  const string remote_desc = ptr->addr2string();
+  {
+    const string remote_desc = ptr->addr2string();
+    printf("CLIENT: connected to server %s\n", remote_desc.c_str());
+  }
   remotes.emplace_back(move(ptr));
-  printf("CLIENT: connected to server %s\n", remote_desc.c_str());
 }
 
 static bool update_server_addr(remote_peer_detail_t &pdat) {
@@ -163,6 +166,7 @@ static bool update_server_addr(remote_peer_detail_t &pdat) {
     pdat.locked_run([&remote](remote_peer_detail_t &o) {
       o.seen = last_time;
       o.set_saddr(remote, false);
+      o.set_port_if_unset(zprd_conf.data_port, false);
     });
     return true;
   }

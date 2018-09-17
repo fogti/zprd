@@ -10,7 +10,7 @@
 #include <string.h> // memset
 #include <netdb.h>  // getaddrinfo
 
-bool resolve_hostname(const char * const hostname, struct sockaddr_storage &remote, const sa_family_t preferred_af) noexcept {
+bool resolve_hostname(std::string hostname, struct sockaddr_storage &remote, const sa_family_t preferred_af) noexcept {
   struct addrinfo hints, *servinfo;
 
   // setup hints
@@ -18,7 +18,14 @@ bool resolve_hostname(const char * const hostname, struct sockaddr_storage &remo
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_DGRAM;
 
-  if(const int rv = getaddrinfo(hostname, nullptr, &hints, &servinfo)) {
+  const size_t befport = hostname.find('|');
+  char * portptr = nullptr;
+  if(befport != std::string::npos && hostname[befport + 1]) {
+    portptr = &hostname[befport];
+    *(portptr++) = 0;
+  }
+
+  if(const int rv = getaddrinfo(hostname.c_str(), portptr, &hints, &servinfo)) {
     printf("CLIENT ERROR: getaddrinfo: %s\n", gai_strerror(rv));
     return false;
   }

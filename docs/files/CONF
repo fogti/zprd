@@ -10,7 +10,9 @@ CMDs:
   #  comment
   A  ip address (they are passed unescaped to iproute2 via system(3))
   I  interface
-  R  remote
+  R  remote (they support the formats
+     IP_ADDR
+     IP_ADDR|PORT)
   T  remote timeout (re-resolve remote)
   U  drop privs to. user
 
