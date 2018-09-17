@@ -145,12 +145,12 @@ static bool setup_server_fd(const sa_family_t sa_family) {
 }
 
 static void connect2server(const string &r, const size_t cent) {
-  auto ptr = make_shared<remote_peer_detail_t>();
-  struct sockaddr_storage &remote = ptr->saddr;
+  // don't use a reference into ptr here, it causes memory corruption
+  struct sockaddr_storage remote;
   memset(&remote, 0, sizeof(remote));
   if(!resolve_hostname(r, remote, zprd_conf.preferred_af))
     return;
-  ptr->cent = cent;
+  auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
   ptr->set_port_if_unset(zprd_conf.data_port, false);
   {
     const string remote_desc = ptr->addr2string();
@@ -1357,6 +1357,8 @@ static void del_route_msg(const decltype(routes)::value_type &addr_v, const remo
 
 static bool do_epoll_add(const int epoll_fd, const int fd_to_add) {
   struct epoll_event epevent;
+  // make valgrind happy
+  memset(&epevent, 0, sizeof(epevent));
   epevent.events = EPOLLIN;
   epevent.data.fd = fd_to_add;
   if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd_to_add, &epevent)) {
