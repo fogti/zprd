@@ -119,7 +119,7 @@ void sender_t::worker_fn() noexcept {
 
   vector<send_data> tasks;
   vector<zprn2_sdat> zprn_msgs;
-  unordered_map<remote_peer_ptr_t, vector<char>> zprn_buf;
+  unordered_map<remote_peer_ptr_t, vector<vector<char>>> zprn_buf;
   vector<char> zprn_hdrv(sizeof(zprn_v2hdr), 0);
   {
     const auto h_zprn = reinterpret_cast<zprn_v2hdr *>(zprn_hdrv.data());
@@ -180,9 +180,7 @@ void sender_t::worker_fn() noexcept {
           got_error = true;
     }
 
-    if(got_error) fflush(stderr);
-    if(zprn_msgs.empty()) continue;
-    got_error = false;
+    if(zprn_msgs.empty()) goto flush_stdstreams;
     tasks.clear();
 
     // setup outer Dont-Frag bit + TOS
@@ -190,9 +188,9 @@ void sender_t::worker_fn() noexcept {
     if(tos) set_tos(0);
 
     // build ZPRN v2 messages for each destination
-    // FIXME: split zprn packet in multiple parts if it exceeds a certain size (e.g. 1232 bytes = 35 packets in worst case),
+    // NOTE: split zprn packet in multiple parts if it exceeds a certain size (e.g. 1232 bytes = 35 packets in worst case),
     //  but it is irrealistic, that this happens.
-    //  This is a problem because IPv6 does not perform fragmentation.
+    //  This is important because IPv6 doesn't perform fragmentation.
     for(auto &i : zprn_msgs) {
       const size_t zmsiz = i.zprn.get_needed_size();
       zprn_buf.reserve(i.dests.size());
@@ -202,7 +200,12 @@ void sender_t::worker_fn() noexcept {
       }
       const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
       for(const auto &dest : i.dests) {
-        auto &bufitem = zprn_buf.try_emplace(dest, zprn_hdrv).first->second;
+        auto &buffer = zprn_buf[dest];
+        if(buffer.empty() || (buffer.back().size() + zmsiz) > 1232) {
+          // create new buffer slot
+          buffer.emplace_back(zprn_hdrv);
+        }
+        auto &bufitem = buffer.back();
         bufitem.reserve(bufitem.size() + zmsiz);
         bufitem.insert(bufitem.end(), zmbeg, zmend);
       }
@@ -211,11 +214,14 @@ void sender_t::worker_fn() noexcept {
     zprn_msgs.clear();
 
     // send ZPRN v2 messages
-    for(const auto &dat : zprn_buf)
-      if(!sendto_peer(dat.first, dat.second.data(), dat.second.size()))
-        got_error = true;
+    for(const auto &bufpd : zprn_buf)
+      for(const auto &pkt : bufpd.second)
+        if(!sendto_peer(bufpd.first, pkt.data(), pkt.size()))
+          got_error = true;
 
     zprn_buf.clear();
+
+   flush_stdstreams:
     if(got_error) {
       fflush(stdout);
       fflush(stderr);
