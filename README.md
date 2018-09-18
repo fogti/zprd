@@ -37,9 +37,7 @@ with firewalls, NATs and VPNs.
 
  - setup interface (this is usually done by the daemontools)
 
-```
-  ip tuntap add mode tun user ... tun3
-```
+```  ip tuntap add mode tun user ... tun3```
 
  - start zprd (this is usually done by the daemontools)
 
