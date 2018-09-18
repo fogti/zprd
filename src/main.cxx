@@ -965,7 +965,6 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
        *  echoreply : source and destination are swapped
        **/
       const ping_cache_t::data_t edat(iaddr_src, iaddr_dst, h_icmp->icmp6_id, h_icmp->icmp6_seq);
-      // TODO: handle pings
       switch(h_icmp->icmp6_type) {
         case 0x80:
           ping_cache.init(edat, ret.front());

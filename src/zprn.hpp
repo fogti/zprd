@@ -14,14 +14,12 @@ struct zprn_v1 final {
   uint8_t zprn_mgc;
   uint8_t zprn_ver;
 
-  // zprn_cmd = command
-  uint8_t zprn_cmd;
+  uint8_t zprn_cmd;  // command
 #define ZPRN_ROUTEMOD 0x00
 #define ZPRN_CONNMGMT 0x01
 #define ZPRN_RESULT   0x02
 
-  // zprn_prio = priority
-  uint8_t zprn_prio;
+  uint8_t zprn_prio; // priority
 #define ZPRN_ROUTEMOD_DELETE 0xFF
 #define ZPRN_CONNMGMT_OPEN   0x00
 #define ZPRN_CONNMGMT_CLOSE  0xFF

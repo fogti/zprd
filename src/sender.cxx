@@ -75,9 +75,9 @@ void sender_t::worker_fn() noexcept {
   // create a backup
   const auto my_server_fds = server_fds;
 
-  const auto sendto_peer = [&my_server_fds](const remote_peer_ptr_t &i, const char * const buf, const size_t buflen) noexcept -> bool {
+  const auto sendto_peer = [&my_server_fds](const remote_peer_ptr_t &i, const vector<char> &buf) noexcept -> bool {
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
-      if(sendto(my_server_fds.at(o.saddr.ss_family), buf, buflen, 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
+      if(sendto(my_server_fds.at(o.saddr.ss_family), buf.data(), buf.size(), 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
         perror("sendto()");
         return false;
       }
@@ -141,12 +141,11 @@ void sender_t::worker_fn() noexcept {
 
     // send normal data
     for(auto &dat: tasks) {
-      auto buf = dat.buffer.data();
-      const auto buflen = dat.buffer.size();
-
-      // send data
       // NOTE: it is impossible that local_ip and others are destinations together
       if(dat.dests.empty()) {
+        auto buf = dat.buffer.data();
+        const auto buflen = dat.buffer.size();
+
         { // update checksum if ipv4
           const auto h_ip = reinterpret_cast<struct ip*>(buf);
           if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
@@ -176,7 +175,7 @@ void sender_t::worker_fn() noexcept {
 
      cont_nohs:
       for(const auto &i : dat.dests)
-        if(!sendto_peer(i, buf, buflen))
+        if(!sendto_peer(i, dat.buffer))
           got_error = true;
     }
 
@@ -216,7 +215,7 @@ void sender_t::worker_fn() noexcept {
     // send ZPRN v2 messages
     for(const auto &bufpd : zprn_buf)
       for(const auto &pkt : bufpd.second)
-        if(!sendto_peer(bufpd.first, pkt.data(), pkt.size()))
+        if(!sendto_peer(bufpd.first, pkt))
           got_error = true;
 
     zprn_buf.clear();
