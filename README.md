@@ -18,9 +18,9 @@ with firewalls, NATs and VPNs.
    to have very less overhead. It is intended to be used
    in combination with VPN software.
 
- - The ZPRD ONLY tunnels IPv4 packets over UDP and IPv4.
+ - The ZPRD ONLY tunnels IPv4 packets over UDP and IPv4 (IPv6 experimental).
 
-   - protocol stacking: ```ethernet > ipv4 > udp > ipv4 > payload```
+   - protocol stacking: ```ethernet > ipv4/6 > udp > ipv4 > payload```
 
 ## Manual Setup
 
@@ -37,13 +37,7 @@ with firewalls, NATs and VPNs.
 
  - setup interface (this is usually done by the daemontools)
 
-```
-  ip tuntap add mode tun user ... tun3
-  ip addr add .../24 dev tun3
-  # MTU = base MTU (1500) - UDP (8) - IP (20)
-  ip link set dev tun3 mtu 1472
-  ip link set dev tun3 up
-```
+```  ip tuntap add mode tun user ... tun3```
 
  - start zprd (this is usually done by the daemontools)
 
