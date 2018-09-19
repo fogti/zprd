@@ -6,6 +6,7 @@
 
 #define __USE_MISC 1
 #include "resolve.hpp"
+#include <config.h>
 #include <stdio.h>  // printf
 #include <string.h> // memset
 #include <netdb.h>  // getaddrinfo
@@ -18,16 +19,18 @@ bool resolve_hostname(std::string hostname, struct sockaddr_storage &remote, con
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_DGRAM;
 
-  const size_t befport = hostname.find('|');
-  char * portptr = nullptr;
-  if(befport != std::string::npos && hostname[befport + 1]) {
-    portptr = &hostname[befport];
-    *(portptr++) = 0;
-  }
+  {
+    char * portptr = nullptr;
+    const size_t befport = hostname.find('|');
+    if(befport != std::string::npos && hostname[befport + 1]) {
+      portptr = &hostname[befport];
+      *(portptr++) = 0;
+    }
 
-  if(const int rv = getaddrinfo(hostname.c_str(), portptr, &hints, &servinfo)) {
-    printf("CLIENT ERROR: getaddrinfo: %s\n", gai_strerror(rv));
-    return false;
+    if(const int rv = getaddrinfo(hostname.c_str(), portptr, &hints, &servinfo)) {
+      printf("CLIENT ERROR: getaddrinfo: %s\n", gai_strerror(rv));
+      return false;
+    }
   }
 
   struct addrinfo *siptr = servinfo;
@@ -38,6 +41,8 @@ bool resolve_hostname(std::string hostname, struct sockaddr_storage &remote, con
     // if no possible entry matches the preferred address family, use first
     siptr = servinfo;
   }
+  if(zs_unlikely(!siptr))
+    return false;
 
  done:
   // copy ai_addr to remote + clear out unused rest

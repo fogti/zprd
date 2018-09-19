@@ -39,6 +39,7 @@
 #include <fcntl.h>            // O_* S_*
 
 // C++
+#include <algorithm>
 #include <atomic>
 #include <fstream>
 #include <thread>
@@ -988,7 +989,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   }
 
   sender.enqueue({{buffer, buffer + buflen}, move(ret), htons(IP_DF),
-    (ntohl(h_ip->ip6_flow) & 0xFF00000) >> 20}); // this line extracts the Type-Of-Service field from the inclusive flow label field
+    static_cast<uint8_t>((ntohl(h_ip->ip6_flow) & 0xFF00000) >> 20)}); // this line extracts the Type-Of-Service field from the inclusive flow label field
 }
 
 static uint8_t get_ip_version(const char buffer[], const uint16_t len) {

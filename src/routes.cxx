@@ -5,6 +5,7 @@
  **/
 
 #include "routes.hpp"
+#include <algorithm>
 #include <config.h> // zs_*likely
 
 using namespace std;
