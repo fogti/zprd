@@ -47,7 +47,6 @@
 // own parts
 #include <config.h>
 #include "AFa.hpp"
-#include "backtrace.h"
 #include "crest.h"
 #include "crw.h"
 #include "ping_cache.hpp"
@@ -60,6 +59,10 @@
 
 // -lowlevelzs
 #include <zs/ll/zsig.h>
+
+#ifdef USE_DEBUG
+# include <death_handler.h>
+#endif
 
 // buffer for reading from tun/tap interface, must be greater than 1500
 #define BUFSIZE 0xffff
@@ -1382,7 +1385,7 @@ static void send_zprn_connmgmt_msg(const uint8_t prio) {
 
 int main(int argc, char *argv[]) {
 #ifdef USE_DEBUG
-  setup_sigsegv_handler();
+  Debug::DeathHandler _death_handler;
 #endif
   { // parse command line
     string confpath = "/etc/zprd.conf";
