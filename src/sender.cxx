@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include "sender.hpp"
 #include "crest.h"
+#include <memut.hpp>
+#include <config.h>
 #include <stdio.h>       // perror
 #include <unistd.h>      // write
 #include <sys/prctl.h>   // prctl
@@ -87,18 +89,27 @@ void sender_t::worker_fn() noexcept {
 
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
 
-  bool df = false;
-  uint8_t tos = 0;
+  bool got_error = false, df = false;
+  uint32_t tos = 0;
+
+  const int fd_inet = my_server_fds.at(AF_INET);
+#ifdef USE_IPV6
+  const auto fdx_inet6 = ([&my_server_fds]() noexcept -> pair<bool, int> {
+    const auto it = my_server_fds.find(AF_INET6);
+    if(it == my_server_fds.end()) return {false, 0};
+    return {true, it->second};
+  })();
+#endif
 
   const auto set_df = [&](const bool cdf) noexcept {
     const int tmp_df = cdf
 # if defined(IP_DONTFRAG)
       ;
-    if(setsockopt(my_server_fds.at(AF_INET), IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
+    if(setsockopt(fd_inet, IPPROTO_IP, IP_DONTFRAG, &tmp_df, sizeof(tmp_df)) < 0)
       perror("SENDER WARNING: setsockopt(IP_DONTFRAG) failed");
 # elif defined(IP_MTU_DISCOVER)
       ? IP_PMTUDISC_WANT : IP_PMTUDISC_DONT;
-    if(setsockopt(my_server_fds.at(AF_INET), IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
+    if(setsockopt(fd_inet, IPPROTO_IP, IP_MTU_DISCOVER, &tmp_df, sizeof(tmp_df)) < 0)
       perror("SENDER WARNING: setsockopt(IP_MTU_DISCOVER) failed");
 # else
 #  warning "set_ip_df: no method available to manage the dont-frag bit"
@@ -108,10 +119,19 @@ void sender_t::worker_fn() noexcept {
     else df = cdf;
   };
 
-  const auto set_tos = [&](const uint8_t ctos) noexcept {
-    if(setsockopt(my_server_fds.at(AF_INET), IPPROTO_IP, IP_TOS, &ctos, 1) < 0)
+  const auto set_tos = [&](const uint32_t ctos) noexcept {
+    // ignore failure of set_tos
+    const uint8_t ip4_tos = tos = ctos;
+    if(setsockopt(fd_inet, IPPROTO_IP, IP_TOS, &ip4_tos, 1) < 0) {
       perror("SENDER WARNING: setsockopt(IP_TOS) failed");
-    else tos = ctos;
+      got_error = true;
+    }
+#ifdef USE_IPV6
+    if(fdx_inet6.first && setsockopt(fdx_inet6.second, IPPROTO_IPV6, IPV6_TCLASS, &ctos, sizeof(ctos)) < 0) {
+      perror("SENDER WARNING: setsockopt(IPV6_TCLASS) failed");
+      got_error = true;
+    }
+#endif
   };
 
   set_df(false);
@@ -120,11 +140,13 @@ void sender_t::worker_fn() noexcept {
   vector<send_data> tasks;
   vector<zprn2_sdat> zprn_msgs;
   unordered_map<remote_peer_ptr_t, vector<vector<char>>> zprn_buf;
-  vector<char> zprn_hdrv(sizeof(zprn_v2hdr), 0);
-  {
-    const auto h_zprn = reinterpret_cast<zprn_v2hdr *>(zprn_hdrv.data());
-    h_zprn->zprn_ver = 2;
-  }
+  const auto zprn_hdrv = ([]() -> vector<char> {
+    zprn_v2hdr x_zprn;
+    zeroify(x_zprn);
+    x_zprn.zprn_ver = 2;
+    const auto h_zprn = reinterpret_cast<const char *>(&x_zprn);
+    return vector<char>(h_zprn, h_zprn + sizeof(x_zprn));
+  })();
 
   while(true) {
     {
@@ -137,7 +159,7 @@ void sender_t::worker_fn() noexcept {
       _zprn_msgs = {};
     }
 
-    bool got_error = false;
+    got_error = false;
 
     // send normal data
     for(auto &dat: tasks) {
@@ -158,22 +180,14 @@ void sender_t::worker_fn() noexcept {
         continue;
       }
 
-      // detect if we need to set the df and tos bits
-      for(const auto &i : dat.dests)
-        if(i->get_saddr().ss_family == AF_INET)
-          goto cont_ipv4hs;
-      goto cont_nohs;
+      // setup outer TOS
+      if(tos != dat.tos) set_tos(dat.tos);
 
-     cont_ipv4hs:
       { // setup outer Dont-Frag bit
         const bool cdf = dat.frag & htons(IP_DF);
         if(df != cdf) set_df(cdf);
       }
 
-      // setup outer TOS
-      if(tos != dat.tos) set_tos(dat.tos);
-
-     cont_nohs:
       for(const auto &i : dat.dests)
         if(!sendto_peer(i, dat.buffer))
           got_error = true;

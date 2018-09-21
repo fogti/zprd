@@ -1,6 +1,7 @@
 ZPRD is licensed under GPLv2+ (which includes GPLv3).
 
 The files under directory 3rdparty are licensed under different licenses.
+The file include/memut.hpp is licensed under MIT.
 The files src/crw.c and src/crw.h are licensed under GPLv3.
 The file src/cksum.cxx is dual-licensed under MIT + BSD-3-clause license.
 Any other file is licensed under GPLv2, GPLv3 and newer versions.

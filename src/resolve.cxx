@@ -6,16 +6,16 @@
 
 #define __USE_MISC 1
 #include "resolve.hpp"
+#include "memut.hpp"
 #include <config.h>
 #include <stdio.h>  // printf
-#include <string.h> // memset
 #include <netdb.h>  // getaddrinfo
 
 bool resolve_hostname(std::string hostname, struct sockaddr_storage &remote, const sa_family_t preferred_af) noexcept {
   struct addrinfo hints, *servinfo;
 
   // setup hints
-  memset(&hints, 0, sizeof hints);
+  zeroify(hints);
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_DGRAM;
 
@@ -46,9 +46,7 @@ bool resolve_hostname(std::string hostname, struct sockaddr_storage &remote, con
 
  done:
   // copy ai_addr to remote + clear out unused rest
-  memcpy(&remote, reinterpret_cast<struct sockaddr_storage *>(siptr->ai_addr), siptr->ai_addrlen);
-  const size_t dif = sizeof(struct sockaddr_storage) - siptr->ai_addrlen;
-  memset(&remote + siptr->ai_addrlen, 0, dif);
+  partial_memcpy(&remote, reinterpret_cast<struct sockaddr_storage *>(siptr->ai_addr), siptr->ai_addrlen);
   freeaddrinfo(servinfo); // all done with this structure
   return true;
 }

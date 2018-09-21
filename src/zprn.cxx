@@ -5,11 +5,10 @@
  **/
 
 #include "zprn.hpp"
-#include <string.h>
+#include "memut.hpp"
 
-zprn_v1::zprn_v1() noexcept : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0) {
-  memset(&zprn_un, 0, sizeof(zprn_un));
-}
+zprn_v1::zprn_v1() noexcept : zprn_mgc(0), zprn_ver(1), zprn_cmd(0), zprn_prio(0)
+  { zeroify(zprn_un); }
 
 bool zprn_v1::valid() const noexcept {
   if(zprn_mgc || zprn_ver != 1)

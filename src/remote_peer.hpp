@@ -9,6 +9,7 @@
 #include <stddef.h>     // size_t
 #include <time.h>       // time_t
 
+#include <memut.hpp>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -20,14 +21,15 @@ class remote_peer_t : public std::enable_shared_from_this<remote_peer_t> {
  public:
   struct sockaddr_storage saddr;
 
-  remote_peer_t() noexcept;
+  [[gnu::hot]]
+  remote_peer_t() noexcept { zeroify(saddr); }
   virtual ~remote_peer_t() = default;
   remote_peer_t(const struct sockaddr_storage &sas) noexcept;
   remote_peer_t(remote_peer_t &&o) noexcept;
   remote_peer_t(const remote_peer_t &o) noexcept = delete;
 
   // convert saddr to a string
-  auto addr2string() const -> std::string;
+  auto addr2string(std::string &&prefix = {}) const -> std::string;
 
   // generic access methods, locked
   auto get_saddr() const noexcept -> sockaddr_storage;

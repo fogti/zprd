@@ -50,6 +50,7 @@
 #include "AFa.hpp"
 #include "crest.h"
 #include "crw.h"
+#include "memut.hpp"
 #include "ping_cache.hpp"
 #include "remote_peer.hpp"
 #include "resolve.hpp"
@@ -151,7 +152,7 @@ static bool setup_server_fd(const sa_family_t sa_family) {
 static void connect2server(const string &r, const size_t cent) {
   // don't use a reference into ptr here, it causes memory corruption
   struct sockaddr_storage remote;
-  memset(&remote, 0, sizeof(remote));
+  zeroify(remote);
   if(!resolve_hostname(r, remote, zprd_conf.preferred_af))
     return;
   auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
@@ -405,19 +406,11 @@ static bool init_all(const string &confpath) {
 
 // get_remote_desc: returns a description string of socket ip
 [[gnu::hot]]
-static string get_remote_desc(const remote_peer_t &addr) {
-  return (addr == remote_peer_t())
-         ? string("local")
-         : (string("peer ") + addr.addr2string());
-}
-[[gnu::hot]]
 static string get_remote_desc(const remote_peer_ptr_t &addr) {
-  const remote_peer_t &peer = *addr;
-  return (addr.unique()
-    ? get_remote_desc(peer)
-    : peer.locked_crun([](const remote_peer_t &o)
-        { return get_remote_desc(o); })
-  );
+  // we don't need a read-only-lock, as we are in the only thread that writes to remotes
+  return (*addr == remote_peer_t())
+         ? string("local")
+         : addr->addr2string("peer ");
 }
 
 [[gnu::hot]]
@@ -490,17 +483,22 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
   constexpr const size_t buflen = 2 * sizeof(struct ip) + sizeof(struct icmphdr) + 8;
   send_data dat{vector<char>(buflen, 0), {source_ip}};
   char *const buffer = dat.buffer.data();
-
-  const auto h_ip = reinterpret_cast<struct ip*>(buffer);
   char * bufnxt = buffer + sizeof(struct ip);
-  h_ip->ip_v   = 4;
-  h_ip->ip_hl  = 5;
-  h_ip->ip_len = htons(static_cast<uint16_t>(buflen));
-  h_ip->ip_id  = rand();
-  h_ip->ip_ttl = MAXTTL;
-  h_ip->ip_p   = IPPROTO_ICMP;
-  get_local_addr(IAFA_AT_INET, &h_ip->ip_src);
-  h_ip->ip_dst = orig_hip->ip_src;
+
+  {
+    // proper alignment for struct ip
+    struct ip x_ip;
+    zeroify(x_ip);
+    x_ip.ip_v   = 4;
+    x_ip.ip_hl  = 5;
+    x_ip.ip_len = htons(static_cast<uint16_t>(buflen));
+    x_ip.ip_id  = rand();
+    x_ip.ip_ttl = MAXTTL;
+    x_ip.ip_p   = IPPROTO_ICMP;
+    get_local_addr(IAFA_AT_INET, &x_ip.ip_src);
+    x_ip.ip_dst = orig_hip->ip_src;
+    memcpy_from(buffer, &x_ip);
+  }
 
   const auto h_icmp = reinterpret_cast<struct icmphdr*>(bufnxt);
   bufnxt += sizeof(struct icmphdr);
@@ -528,7 +526,7 @@ static void send_icmp_msg(const zprd_icmpe msg, struct ip * const orig_hip, cons
 
   // setup payload = orig ip header
   orig_hip->ip_sum = IN_CKSUM(orig_hip);
-  memcpy(bufnxt, orig_hip, sizeof(struct ip));
+  memcpy_from(bufnxt, orig_hip);
   bufnxt += sizeof(struct ip);
 
   // setup secondary payload = first 8 bytes of original payload
@@ -545,17 +543,22 @@ static void send_icmp6_msg(const zprd_icmpe msg, struct ip6_hdr * const orig_hip
   constexpr const size_t buflen = 2 * ip6hlen + sizeof(struct icmp6_hdr) + 8;
   send_data dat{vector<char>(buflen, 0), {source_ip}, htons(IP_DF)};
   char *const buffer = dat.buffer.data();
-
-  const auto h_ip = reinterpret_cast<struct ip6_hdr*>(buffer);
   char * bufnxt  = buffer + ip6hlen;
-  h_ip->ip6_vfc  = 0x60;
-  h_ip->ip6_plen = htons(static_cast<uint16_t>(buflen - ip6hlen));
-  h_ip->ip6_nxt  = 0x3a;
-  h_ip->ip6_hops = MAXTTL;
 
-  // copy ip addrs
-  get_local_addr(IAFA_AT_INET6, &h_ip->ip6_src);
-  memcpy(&h_ip->ip6_dst, &orig_hip->ip6_src, sizeof(struct in6_addr));
+  {
+    // proper alignment for struct ip6_hdr
+    struct ip6_hdr x_ip;
+    zeroify(x_ip);
+    x_ip.ip6_vfc  = 0x60;
+    x_ip.ip6_plen = htons(static_cast<uint16_t>(buflen - ip6hlen));
+    x_ip.ip6_nxt  = 0x3a;
+    x_ip.ip6_hops = MAXTTL;
+
+    // copy ip addrs
+    get_local_addr(IAFA_AT_INET6, &x_ip.ip6_src);
+    whole_memcpy(&x_ip.ip6_dst, &orig_hip->ip6_src);
+    memcpy_from(buffer, &x_ip);
+  }
 
   // setup ICMPv6 part
   const auto h_icmp = reinterpret_cast<struct icmp6_hdr*>(bufnxt);
@@ -583,7 +586,7 @@ static void send_icmp6_msg(const zprd_icmpe msg, struct ip6_hdr * const orig_hip
   }
 
   // setup payload = orig ip header
-  memcpy(bufnxt, orig_hip, ip6hlen);
+  memcpy_from(bufnxt, orig_hip);
   bufnxt += ip6hlen;
 
   // setup secondary payload = first 8 bytes of original payload
@@ -779,7 +782,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 
     if(const auto aptr = get_local_aptr(IAFA_AT_INET)) {
       char tmp[4];
-      memcpy(tmp, &ip_dst.s_addr, sizeof(tmp));
+      whole_memcpy_lazy(tmp, &ip_dst.s_addr);
       xner_apply_netmask(tmp, aptr->nmsk, sizeof(tmp));
       send_icmp_msg((
         (!memcmp(aptr->addr, tmp, sizeof(tmp)))
@@ -928,7 +931,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
 
     if(const auto aptr = get_local_aptr(IAFA_AT_INET6)) {
       char tmp[sizeof(in6_addr)];
-      memcpy(tmp, &ip_dst, sizeof(tmp));
+      whole_memcpy_lazy(tmp, &ip_dst);
       xner_apply_netmask(tmp, aptr->nmsk, sizeof(tmp));
       send_icmp6_msg((
         (!memcmp(aptr->addr, tmp, sizeof(tmp)))
@@ -989,7 +992,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   }
 
   sender.enqueue({{buffer, buffer + buflen}, move(ret), htons(IP_DF),
-    static_cast<uint8_t>((ntohl(h_ip->ip6_flow) & 0xFF00000) >> 20)}); // this line extracts the Type-Of-Service field from the inclusive flow label field
+    (ntohl(h_ip->ip6_flow) & 0xFF00000) >> 20}); // this line extracts the Type-Of-Service field from the inclusive flow label field
 }
 
 static uint8_t get_ip_version(const char buffer[], const uint16_t len) {
@@ -1361,7 +1364,7 @@ static void del_route_msg(const decltype(routes)::value_type &addr_v, const remo
 static bool do_epoll_add(const int epoll_fd, const int fd_to_add) {
   struct epoll_event epevent;
   // make valgrind happy
-  memset(&epevent, 0, sizeof(epevent));
+  zeroify(epevent);
   epevent.events = EPOLLIN;
   epevent.data.fd = fd_to_add;
   if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd_to_add, &epevent)) {
@@ -1375,11 +1378,10 @@ static bool do_epoll_add(const int epoll_fd, const int fd_to_add) {
 static void send_zprn_connmgmt_msg(const uint8_t prio) {
   // notify our peers that we are here
   zprn_v2 msg;
+  zeroify(msg);
   msg.zprn_cmd = ZPRN_CONNMGMT;
   msg.zprn_prio = prio;
-  if(locals.empty())
-    memset(&msg.route, 0, sizeof(msg.route));
-  else
+  if(!locals.empty())
     msg.route = locals.front();
   send_zprn_msg(msg);
 }
@@ -1480,7 +1482,7 @@ int main(int argc, char *argv[]) {
       }
 
       uint16_t nread = BUFSIZE;
-      char buffer[BUFSIZE];
+      alignas(2) char buffer[BUFSIZE];
       remote_peer_detail_ptr_t peer_ptr;
       string source_desc;
 

@@ -8,6 +8,7 @@
 #include "iAFa.hpp"
 #include "AFa.hpp"
 #include <string.h>
+#include <memut.hpp>
 
 using namespace std;
 
@@ -30,31 +31,21 @@ static iafa_at_t zs_attrib_pure sa_family2iafa_at(const sa_family_t sa_fam) noex
 }
 
 inner_addr_t::inner_addr_t(const inner_addr_t &o) noexcept
-  : type(o.type) {
-  const size_t oalen = o.get_alen();
-  memcpy(addr, o.addr, oalen);
-  memset(addr + oalen, 0, sizeof(addr) - oalen);
-}
+  : type(o.type)
+  { partial_memcpy_bytes<sizeof(addr)>(addr, o.addr, o.get_alen()); }
 
-inner_addr_t::inner_addr_t(const struct sockaddr_storage &o) noexcept {
-  type = sa_family2iafa_at(o.ss_family);
-  const size_t oalen = get_alen();
-  memcpy(addr, AFa_gp_addr(o), oalen);
-  memset(addr + oalen, 0, sizeof(addr) - oalen);
-}
+inner_addr_t::inner_addr_t(const struct sockaddr_storage &o) noexcept
+  : type(sa_family2iafa_at(o.ss_family))
+  { partial_memcpy_bytes<sizeof(addr)>(addr, AFa_gp_addr(o), get_alen()); }
 
 inner_addr_t::inner_addr_t(const uint32_t ip4a) noexcept : type(IAFA_AT_INET) {
-  constexpr const size_t ipalen = sizeof(ip4a);
-  static_assert(ipalen == pli_at2alen(IAFA_AT_INET));
-  memcpy(addr, &ip4a, ipalen);
-  memset(addr + ipalen, 0, sizeof(addr) - ipalen);
+  static_assert(sizeof(ip4a) == pli_at2alen(IAFA_AT_INET));
+  partial_memcpy_lazy<sizeof(addr), decltype(ip4a)>(addr, &ip4a);
 }
 
 inner_addr_t::inner_addr_t(const in6_addr ip6a) noexcept : type(IAFA_AT_INET6) {
-  constexpr const size_t ipalen = sizeof(ip6a);
-  static_assert(ipalen == pli_at2alen(IAFA_AT_INET6));
-  memcpy(addr, &ip6a, ipalen);
-  memset(addr + ipalen, 0, sizeof(addr) - ipalen);
+  static_assert(sizeof(ip6a) == pli_at2alen(IAFA_AT_INET6));
+  partial_memcpy_lazy<sizeof(addr), decltype(ip6a)>(addr, &ip6a);
 }
 
 size_t inner_addr_t::get_alen() const noexcept {
@@ -98,11 +89,7 @@ bool operator!=(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept
 
 xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept : inner_addr_t() {
   type = o.type;
-  const size_t oalen = pli_at2alen(type), difl = sizeof(addr) - oalen;
-  memcpy(addr, o.addr, oalen);
-  memset(addr + oalen, 0, difl);
-  memcpy(nmsk, o.nmsk, oalen);
-  memset(nmsk + oalen, 0, difl);
+  i_set2am(o.addr, o.nmsk);
 }
 
 xner_addr_t::xner_addr_t(const inner_addr_t &o, const size_t pflen) noexcept
@@ -110,10 +97,15 @@ xner_addr_t::xner_addr_t(const inner_addr_t &o, const size_t pflen) noexcept
 
 xner_addr_t::xner_addr_t(const sockaddr_storage &o, const sockaddr_storage &netmask) noexcept {
   type = sa_family2iafa_at(o.ss_family);
+  i_set2am(AFa_gp_addr(o), AFa_gp_addr(netmask));
+}
+
+// IMPORTANT NOTE: this function assumes that 'this->type' is set correctly
+void xner_addr_t::i_set2am(const char * const __restrict__ p_addr, const char * const __restrict__ p_nmsk) noexcept {
   const size_t oalen = pli_at2alen(type), difl = sizeof(addr) - oalen;
-  memcpy(addr, AFa_gp_addr(o), oalen);
+  memcpy(addr, p_addr, oalen);
   memset(addr + oalen, 0, difl);
-  memcpy(nmsk, &netmask, oalen);
+  memcpy(nmsk, p_nmsk, oalen);
   memset(nmsk + oalen, 0, difl);
 }
 

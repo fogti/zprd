@@ -7,13 +7,11 @@
 
 #include "remote_peer.hpp"
 #include "AFa.hpp"
+#include "memut.hpp"
 
 #include <stdio.h>
 #include <arpa/inet.h> // sockaddr_in, INADDR_ANY, in6addr_any
 #include <string.h>
-
-remote_peer_t::remote_peer_t() noexcept
-  { memset(&saddr, 0, sizeof(saddr)); }
 
 remote_peer_t::remote_peer_t(const struct sockaddr_storage &sas) noexcept
   { set_saddr(sas, false); }
@@ -22,9 +20,8 @@ remote_peer_t::remote_peer_t(remote_peer_t &&o) noexcept
   { set_saddr(o.saddr, false); }
 
 [[gnu::hot]]
-static int compare_peers(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept {
-  return AFa_sa_compare(lhs.saddr, rhs.saddr);
-}
+static inline int compare_peers(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
+  { return AFa_sa_compare(lhs.saddr, rhs.saddr); }
 
 bool operator==(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
   { return !compare_peers(lhs, rhs); }
@@ -37,9 +34,14 @@ bool operator>(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
 
 using std::string;
 
-auto remote_peer_t::addr2string() const -> string {
+[[gnu::hot]]
+auto remote_peer_t::addr2string(string &&prefix) const -> string {
   const sa_family_t sa_fam = saddr.ss_family;
-  return AFa_addr2string(sa_fam, AFa_gp_addr(saddr)) + ':' + AFa_port2string(sa_fam, AFa_gp_port(saddr));
+  string ret = move(prefix);
+  ret += AFa_addr2string(sa_fam, AFa_gp_addr(saddr));
+  ret += ':';
+  ret += AFa_port2string(sa_fam, AFa_gp_port(saddr));
+  return ret;
 }
 
 auto remote_peer_t::get_saddr() const noexcept -> sockaddr_storage {
@@ -53,7 +55,7 @@ void remote_peer_t::set_saddr(const sockaddr_storage &sas, const bool do_lock) n
     // single self-recursion
     set_saddr(sas, false);
   } else {
-    memcpy(&saddr, &sas, sizeof(saddr));
+    whole_memcpy(&saddr, &sas);
   }
 }
 
