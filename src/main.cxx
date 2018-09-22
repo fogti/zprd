@@ -1386,6 +1386,16 @@ static void send_zprn_connmgmt_msg(const uint8_t prio) {
   send_zprn_msg(msg);
 }
 
+template<class TCont, class Fn>
+static void map_remove_if(TCont &cont, const Fn &fn) {
+  for(auto it = cont.begin(); it != cont.end();) {
+    if(fn(*it))
+      it = cont.erase(it);
+    else
+      ++it;
+  }
+}
+
 int main(int argc, char *argv[]) {
 #ifdef USE_DEBUG
   Debug::DeathHandler _death_handler;
@@ -1487,8 +1497,8 @@ int main(int argc, char *argv[]) {
       string source_desc;
 
       for(int i = 0; i < epevcnt; ++i) {
-        const int cur_fd = epevents[i].data.fd;
         if(!(epevents[i].events & EPOLLIN)) continue;
+        const int cur_fd = epevents[i].data.fd;
         if(cur_fd == local_fd) {
           // data from tun/tap: just read it and write it to the network
           nread = cread(local_fd, buffer, BUFSIZE);
@@ -1516,21 +1526,20 @@ int main(int argc, char *argv[]) {
       // skip remotes which aren't timed out or try to update ip
       if(zs_likely((last_time - zprd_conf.remote_timeout) < pdat.seen) || update_server_addr(pdat)) {
         // check for duplicates
-        for(auto kt = it + 1; kt != remotes.cend();) {
-          auto &odat = **kt;
-          if(!odat.to_discard && pdat == odat) {
-            // we found a duplicate
-            // delete the one which has a corresponding config entry or a lower use count
-            ((!pdat.cent && odat.cent) || (i.use_count() < kt->use_count()) ? &pdat : &odat)
-              ->to_discard = true;
-          }
-          ++kt;
+        for(auto kt = it + 1; kt != remotes.cend(); ++kt) {
+          auto &op = *kt;
+          auto &odat = *op;
+          if(zs_likely(odat.to_discard || pdat != odat))
+            continue;
+          // we found a duplicate
+          // delete the one which has a corresponding config entry or a lower use count
+          ((!pdat.cent && odat.cent) || (i.use_count() < op.use_count()) ? i : op)
+            ->to_discard = true;
         }
         if(!pdat.to_discard)
           continue;
       }
 
-     do_discard:
       for(auto &r: routes)
         if(r.second.del_router(i))
           del_route_msg(r, i);
@@ -1542,11 +1551,11 @@ int main(int argc, char *argv[]) {
     zprn_v2 msg;
     // when seen is smaller than the following time, the route will be probed
     const time_t route_probe_tin = last_time - zprd_conf.remote_timeout;
-    for(auto it = routes.begin(); it != routes.end();) {
-      msg.route = it->first;
-      auto &ise = it->second;
-      ise.cleanup([=](const remote_peer_ptr_t &router)
-        { del_route_msg(*it, router); });
+    map_remove_if(routes, [&](auto &route) -> bool {
+      msg.route = route.first;
+      auto &ise = route.second;
+      ise.cleanup([route](const remote_peer_ptr_t &router)
+        { del_route_msg(route, router); });
 
       const bool iee = ise.empty();
       if(iee || ise._fresh_add) {
@@ -1560,22 +1569,16 @@ int main(int argc, char *argv[]) {
         send_zprn_msg(msg);
       }
 
-      // NOTE: don't use *it after erase (see Issue #1)
-      if(iee) it = routes.erase(it);
-      else ++it;
-    }
+      return iee;
+    });
 
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
-    for(auto it = remotes.cbegin(); it != remotes.cend();) {
-      if((*it)->to_discard)
-        it = remotes.erase(it);
-      else
-        ++it;
-    }
+    map_remove_if(remotes, [](const auto &peer) -> bool
+      { return peer->to_discard; });
 
     size_t i = 0;
     for(const auto fri : found_remotes) {
-      if(!fri) // remote from config wasn't found in 'remotes' map
+      if(zs_unlikely(!fri)) // remote from config wasn't found in 'remotes' map
         connect2server(zprd_conf.remotes[i], i);
       ++i;
     }
