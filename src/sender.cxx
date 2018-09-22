@@ -201,6 +201,27 @@ void sender_t::worker_fn() noexcept {
     if(tos) set_tos(0);
 
     // build ZPRN v2 messages for each destination
+    if(zprn_msgs.size() == 1) {
+      // skip concat part
+      vector<char> xbuf = zprn_hdrv;
+      auto &i = zprn_msgs.front();
+      {
+        const size_t zmsiz = i.zprn.get_needed_size();
+        const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
+        // don't set this earlier, as we need thy host-byte-order.type in get_needed_size
+        auto &x = i.zprn.route.type;
+        x = htons(x);
+        xbuf.reserve(xbuf.size() + zmsiz);
+        xbuf.insert(xbuf.end(), zmbeg, zmend);
+      }
+      for(const auto &dest : i.dests)
+        if(!sendto_peer(dest, xbuf))
+          got_error = true;
+
+      zprn_msgs.clear();
+      goto flush_stdstreams;
+    }
+
     // NOTE: split zprn packet in multiple parts if it exceeds a certain size (e.g. 1232 bytes = 35 packets in worst case),
     //  but it is irrealistic, that this happens.
     //  This is important because IPv6 doesn't perform fragmentation.
