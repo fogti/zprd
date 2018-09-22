@@ -1151,9 +1151,10 @@ static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * co
 }
 
 static void print_packet(const char buffer[], const uint16_t len) {
+  const auto ubuffer = reinterpret_cast<const uint8_t*>(buffer);
   printf("ROUTER DEBUG: pktdat:");
-  const char * const ie = buffer + std::min(len, static_cast<uint16_t>(80));
-  for(const char *i = buffer; i != ie; ++i)
+  const uint8_t * const ie = ubuffer + std::min(len, static_cast<uint16_t>(80));
+  for(const uint8_t *i = ubuffer; i != ie; ++i)
     printf(" %02x", static_cast<unsigned>(*i));
   puts("");
 }
