@@ -1600,5 +1600,10 @@ int main(int argc, char *argv[]) {
   fflush(stdout);
   fflush(stderr);
 
+  // make valgrind happy
+  routes.clear();
+  remotes.clear();
+  locals.clear();
+
   return retcode;
 }
