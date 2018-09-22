@@ -1,30 +1,31 @@
 Overview:
 
-  ZPRN || inner proto (e.g. currently IPv4 + ...)
+  ZPRN || inner proto (e.g. currently IPv4/IPv6 + ...)
       ZPRD
-  outer proto (e.g. currently IPv4 + UDP)
+  outer proto (e.g. currently IPv4/IPv6 + UDP)
 
 Done things:
   outer proto:
-   - support for IPv6, and other protos -- done
-   - Motivation:
-     for port numbers in addr struct:
+   - support for IPv6
+   - Motivation for port numbers in addr struct
      - better support for NAT'ed networks
+
+  inner proto:
+   - support for IPv6
+
+  ZPRN:
+   - PROBE before DELETE
+     e.g. one node is outdated, first PROBE (when timeout) then DELETE (when timeout * 2)
+     why: faster convergence
 
 Planned Things:
 
   ZPRN:
-   - possible: PROBE before DELETE
-     e.g. one node is outdated, first PROBE (when timeout) then DELETE (when timeout * 2)
-     why: faster convergence
    - ZPRNv2: compress ZPRN packets, (new mgc = 0x01)
 
   inner proto:
-   - support for IPv6, and other protos
-     - 1. build datatype (struct { enum, char[X_MAX] }), or use a class hierarchy
-     - 2. innner node's addr's
-     - 3. header manip (e.g. r:src, r:dst, w:ttl, ...)
-     - 4. used in router fn's, routing tables, route_packet
-     - 5. used in send_packet:in_checksum
-     - 6. used in send_icmp_packet (needs to be conditional / implemented for other protos)
-     - 7. build an abstraction layer (interface, multiple classes, virtual methods) around (1.)
+   - possible support for multicasts (currently mostly blocked)
+     - not broadcasts (they MUST be discarded, as they create a too high load on the network)
+     - support for IGMP (Internet Group Management Protocol)
+
+   - possible support for IPX
