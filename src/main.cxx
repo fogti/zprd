@@ -1184,6 +1184,7 @@ static bool handle_zprn_v2_pkt(const remote_peer_detail_ptr_t &srca, char buffer
 
   char *bptr = buffer + sizeof(struct zprn_v2hdr);
   const char * const eobptr = buffer + len;
+  bool got_least1 = false;
   while(bptr < eobptr) {
     const auto cur_ent = reinterpret_cast<struct zprn_v2*>(bptr);
     { // ^ sender_t::worker_fn
@@ -1191,15 +1192,20 @@ static bool handle_zprn_v2_pkt(const remote_peer_detail_ptr_t &srca, char buffer
       x = ntohs(x);
     }
 
-    if((bptr + cur_ent->get_needed_size()) > eobptr)
+    if((bptr + cur_ent->get_needed_size()) > eobptr) {
+      if(!got_least1)
+        printf("ROUTER WARNING: got empty / incomplete ZPRNv2 packet\n");
       break;
+    }
 
     // handle entry
     const auto it = dpt.find(cur_ent->zprn_cmd);
     if(zs_likely(it != dpt.end())) it->second(srca, source_desc_c, *cur_ent);
+    else printf("ROUTER WARNING: got unknown ZPRNv2 command (%02x)\n", cur_ent->zprn_cmd);
 
     // next entry
     bptr += cur_ent->get_needed_size();
+    got_least1 = true;
   }
   return true;
 }
