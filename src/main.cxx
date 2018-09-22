@@ -408,9 +408,7 @@ static bool init_all(const string &confpath) {
 [[gnu::hot]]
 static string get_remote_desc(const remote_peer_ptr_t &addr) {
   // we don't need a read-only-lock, as we are in the only thread that writes to remotes
-  return (*addr == remote_peer_t())
-         ? string("local")
-         : addr->addr2string("peer ");
+  return addr->addr2string("peer ");
 }
 
 [[gnu::hot]]
@@ -1329,21 +1327,18 @@ static string format_time(const time_t x) {
 static void print_routing_table(int) {
   puts("-- connected peers:");
   puts("Peer\t\tSeen\t\tConfig Entry");
-  for(const auto &i: remotes)
-    i->locked_crun([](const remote_peer_detail_t &o) {
-      const string addr = o.addr2string();
-      const auto seen = format_time(o.seen);
-      printf("%s\t%s\t", addr.c_str(), seen.c_str());
-      puts(o.cfgent_name());
-    });
+  for(const auto &i: remotes) {
+    const string addr = i->addr2string();
+    const auto seen = format_time(i->seen);
+    printf("%s\t%s\t", addr.c_str(), seen.c_str());
+    puts(i->cfgent_name());
+  }
   puts("-- routing table:");
   puts("Destination\tGateway\t\tSeen\t\tLatency\tHops");
   for(const auto &i: routes) {
     const string dest = i.first.to_string();
     for(const auto &r: i.second._routers) {
-      const string seen = format_time(r.seen),
-        gateway = r.addr->locked_crun(
-          [](const remote_peer_t &o) { return o.addr2string(); });
+      const string seen = format_time(r.seen), gateway = r.addr->addr2string();
       printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }

@@ -25,4 +25,4 @@ const uint16_t* AFa_gp_port(const struct sockaddr_storage &sas) noexcept;
 
 // generic buffer based funcs
 auto AFa_addr2string(const sa_family_t sa_fam, const char *addr) -> std::string;
-auto AFa_port2string(const sa_family_t sa_fam, const uint16_t *sanport) -> std::string;
+auto AFa_port2string(const uint16_t *sanport) -> std::string;

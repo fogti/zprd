@@ -137,6 +137,6 @@ auto AFa_addr2string(const sa_family_t sa_fam, const char *addr) -> string {
   return {buf};
 }
 
-auto AFa_port2string(const sa_family_t sa_fam, const uint16_t *sanport) -> string {
-  return ui162string(ntohs(*sanport));
+auto AFa_port2string(const uint16_t *sanport) -> string {
+  return sanport ? ui162string(ntohs(*sanport)) : string("(null)");
 }

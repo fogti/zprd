@@ -36,11 +36,11 @@ using std::string;
 
 [[gnu::hot]]
 auto remote_peer_t::addr2string(string &&prefix) const -> string {
-  const sa_family_t sa_fam = saddr.ss_family;
+  if(!saddr.ss_family) return "local";
   string ret = move(prefix);
-  ret += AFa_addr2string(sa_fam, AFa_gp_addr(saddr));
+  ret += AFa_addr2string(saddr.ss_family, AFa_gp_addr(saddr));
   ret += ':';
-  ret += AFa_port2string(sa_fam, AFa_gp_port(saddr));
+  ret += AFa_port2string(AFa_gp_port(saddr));
   return ret;
 }
 
