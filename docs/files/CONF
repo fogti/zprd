@@ -9,7 +9,9 @@ LINE FORMAT:
 CMDs:
   #  comment
   A  ip address (they are passed unescaped to iproute2 via system(3))
+  H  add hook script
   I  interface
+  L  export local (format := IP_ADDR)
   R  remote (they support the formats
      IP_ADDR
      IP_ADDR|PORT)

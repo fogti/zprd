@@ -87,6 +87,7 @@ unordered_map<sa_family_t, int> server_fds;
 
 static vector<remote_peer_detail_ptr_t> remotes;
 static vector<xner_addr_t> locals;
+static vector<inner_addr_t> exported_locals;
 static unordered_map<inner_addr_t, route_via_t, inner_addr_hash> routes;
 
 static sender_t     sender;
@@ -221,7 +222,7 @@ static bool init_all(const string &confpath) {
     // is used when we are root and see the 'U' setting in the conf to drop privileges
     string run_as_user;
     string line;
-    vector<string> addrs;
+    vector<string> addrs, exported_addrs, hooks;
     while(getline(in, line)) {
       if(line.empty() || line.front() == '#') continue;
       string arg = line.substr(1);
@@ -230,8 +231,16 @@ static bool init_all(const string &confpath) {
           addrs.emplace_back(move(arg));
           break;
 
+        case 'H':
+          hooks.emplace_back(move(arg));
+          break;
+
         case 'I':
           zprd_conf.iface = move(arg);
+          break;
+
+        case 'L':
+          exported_addrs.emplace_back(move(arg));
           break;
 
         case 'P':
@@ -305,10 +314,20 @@ static bool init_all(const string &confpath) {
       }
     }
 
-    runcmd("ip link set" + zs_devstr + " mtu 1472");
-    runcmd("ip link set" + zs_devstr + " up");
+    if(!exported_addrs.empty()) {
+      exported_locals.reserve(exported_addrs.size());
+      struct sockaddr_storage xlocal;
+      zeroify(xlocal);
+      for(const auto &i : exported_addrs) {
+        if(!resolve_hostname(i, xlocal, zprd_conf.preferred_af)) {
+          fprintf(stderr, "CONFIG WARNING: can't resolve exported local '%s'\n", i.c_str());
+          continue;
+        }
+        exported_locals.emplace_back(xlocal);
+      }
+    }
 
-# undef runcmd
+    runcmd("ip link set" + zs_devstr + " mtu 1472");
 
     // init tundev
     {
@@ -324,6 +343,11 @@ static bool init_all(const string &confpath) {
 
       printf("connected to interface %s\n", if_name);
     }
+
+    runcmd("ip link set" + zs_devstr + " up");
+    for(const auto &i : hooks) runcmd(i + zs_devstr);
+
+# undef runcmd
 
     if(!run_as_user.empty()) {
       printf("running daemon as user: '%s'\n", run_as_user.c_str());
@@ -446,10 +470,14 @@ static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &it
 
 // is inner_addr:o a local ip?
 [[gnu::hot]]
-static bool am_ii_addr(const inner_addr_t &o) noexcept {
+static bool am_ii_addr(const inner_addr_t &o, const bool with_exported = true) noexcept {
   for(const auto &i : locals)
     if(*reinterpret_cast<const inner_addr_t *>(&i) == o)
       return true;
+  if(with_exported)
+    for(const auto &i : exported_locals)
+      if(i == o)
+        return true;
   return false;
 }
 
@@ -733,7 +761,8 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   const inner_addr_t iaddr_dst(ip_dst.s_addr);
 
   // am I an endpoint
-  const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(iaddr_dst));
+  const bool destination_is_local = !source_is_local && am_ii_addr(iaddr_dst);
+  const bool iam_ep = source_is_local || destination_is_local;
 
   // we can use the ttl directly, it is 1 byte long
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
@@ -753,14 +782,14 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   // update routes
   if(routes[iaddr_src].add_router(
       source_peer,
-      am_ii_addr(iaddr_src) ? 0 : (MAXTTL - h_ip->ip_ttl)
+      am_ii_addr(iaddr_src, false) ? 0 : (MAXTTL - h_ip->ip_ttl)
   ))
     printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
 
   vector<remote_peer_ptr_t> ret;
 
   // get route to destination
-  if(iam_ep && am_ii_addr(iaddr_dst)) {
+  if(destination_is_local) {
     ret.emplace_back(make_shared<remote_peer_t>());
   } else if(const auto r = have_route(ip_dst.s_addr)) {
     ret.emplace_back(r->get_router());
@@ -883,7 +912,8 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
     return;
 
   // am I an endpoint
-  const bool iam_ep = !locals.empty() && (source_is_local || am_ii_addr(iaddr_dst));
+  const bool destination_is_local = !source_is_local && am_ii_addr(iaddr_dst);
+  const bool iam_ep = source_is_local || destination_is_local;
   auto &hops = h_ip->ip6_hops;
 
   // we can use the ttl directly, it is 1 byte long
@@ -901,7 +931,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   // update routes
   if(routes[iaddr_src].add_router(
       source_peer,
-      am_ii_addr(iaddr_src) ? 0 : (MAXTTL - hops)
+      am_ii_addr(iaddr_src, false) ? 0 : (MAXTTL - hops)
   )) {
     const string srcnam = helper_ip6a2string(ip_src);
     printf("ROUTER: add route to %s via %s\n", srcnam.c_str(), source_desc_c);
@@ -911,7 +941,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   vector<remote_peer_ptr_t> ret;
 
   // get route to destination
-  if(iam_ep && am_ii_addr(iaddr_dst)) {
+  if(destination_is_local) {
     ret.emplace_back(make_shared<remote_peer_t>());
   } else if(const auto r = have_route(inner_addr_t(ip_dst))) {
     ret.emplace_back(r->get_router());
@@ -1034,7 +1064,7 @@ static void zprn_v1_routemod_handler(const char *const source_desc_c, const remo
   msg.zprn_cmd = ZPRN_ROUTEMOD;
   msg.zprn_un.route.dsta = dsta;
 
-  if(am_ii_addr(inner_addr_t(dsta))) // a route to us is deleted (and we know we are here)
+  if(am_ii_addr(inner_addr_t(dsta), false)) // a route to us is deleted (and we know we are here)
     msg.zprn_prio = 0;
   else if(r && !r->empty()) // we have a route
     msg.zprn_prio = r->_routers.front().hops;
@@ -1083,7 +1113,7 @@ static void zprn_v2_routemod_handler(const remote_peer_ptr_t &srca, const char *
     printf("ROUTER: delete route to %s via %s (notified)\n", ddcs, source_desc_c);
 
   zprn_v2 msg = d;
-  if(am_ii_addr(dsta)) // a route to us is deleted (and we know we are here)
+  if(am_ii_addr(dsta, false)) // a route to us is deleted (and we know we are here)
     msg.zprn_prio = 0;
   else if(r && !r->empty()) // we have a route
     msg.zprn_prio = r->_routers.front().hops;
@@ -1132,7 +1162,7 @@ static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * co
 
   if(d.zprn_prio == 0xff) {
     // got probe request
-    if(am_ii_addr(dsta)) // a route to us is probed (and we know we are here)
+    if(am_ii_addr(dsta, false)) // a route to us is probed (and we know we are here)
       msg.zprn_prio = 0;
     else if(const auto r = have_route(dsta)) { // we have a route
       msg.zprn_prio = r->_routers.front().hops;
@@ -1609,6 +1639,7 @@ int main(int argc, char *argv[]) {
   routes.clear();
   remotes.clear();
   locals.clear();
+  exported_locals.clear();
 
   return retcode;
 }
