@@ -1304,12 +1304,6 @@ static void read_packet(const int server_fd, remote_peer_detail_ptr_t &srca, cha
 
 // function to route a generic packet
 static void route_genip_packet(const remote_peer_detail_ptr_t &srca, char buffer[], const uint16_t len) {
-  typedef void (*genip_route_fn)(const remote_peer_detail_ptr_t&, char * __restrict__, uint16_t, const char * __restrict__);
-  static const unordered_map<uint8_t, genip_route_fn> jt = {
-    { 4, route_packet },
-    { 6, route6_packet },
-  };
-
   srca->seen = last_time;
   const string source_desc = get_remote_desc(srca);
   const auto source_desc_c = source_desc.c_str();
