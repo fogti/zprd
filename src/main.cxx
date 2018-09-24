@@ -689,6 +689,64 @@ static void send_zprn_msg(const zprn_v2 &msg) {
   sender.enqueue(zprn2_sdat{msg, move(peers)});
 }
 
+static void print_packet(const char buffer[], const uint16_t len) {
+  const auto ubuffer = reinterpret_cast<const uint8_t*>(buffer);
+  printf("ROUTER DEBUG: pktdat:");
+  const uint8_t * const ie = ubuffer + std::min(len, static_cast<uint16_t>(80));
+  for(const uint8_t *i = ubuffer; i != ie; ++i)
+    printf(" %02x", static_cast<unsigned>(*i));
+  puts("");
+}
+
+static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
+  const uint16_t nread = len;
+  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
+  const bool srca_is_local = (*srca == remote_peer_detail_t());
+
+  if(srca_is_local)
+    if(const uint16_t dsum = IN_CKSUM(h_ip)) {
+      printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
+        h_ip->ip_sum, dsum);
+      print_packet(buffer, nread);
+      return false;
+    }
+
+  // get total length
+  len = ntohs(h_ip->ip_len);
+
+  if(zs_unlikely(nread < len)) {
+    printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
+    print_packet(buffer, nread);
+  } else if(zs_unlikely(!srca_is_local && am_ii_addr(inner_addr_t(h_ip->ip_src.s_addr)))) {
+    printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
+  } else {
+    if(zs_unlikely(nread != len))
+      printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
+    return true;
+  }
+  return false;
+}
+
+static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
+  const uint16_t nread = len;
+  const auto h_ip = reinterpret_cast<const struct ip6_hdr*>(buffer);
+
+  // get total length
+  len = ntohs(h_ip->ip6_plen) + sizeof(struct ip6_hdr);
+
+  if(zs_unlikely(nread < len)) {
+    printf("ROUTER ERROR: can't read whole ipv6 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
+    print_packet(buffer, nread);
+  } else if(zs_unlikely(*srca != remote_peer_detail_t() && am_ii_addr(inner_addr_t(h_ip->ip6_src)))) {
+    printf("ROUTER WARNING: drop ipv6 packet (looped with local as source)\n");
+  } else {
+    if(zs_unlikely(nread != len))
+      printf("ROUTER WARNING: ipv6 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
+    return true;
+  }
+  return false;
+}
+
 /** route_packet:
  *
  * decide which socket is the destination,
@@ -704,7 +762,10 @@ static void send_zprn_msg(const zprn_v2 &msg) {
  * @ret             none
  **/
 [[gnu::hot]]
-static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
+static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, uint16_t buflen, const char *const __restrict__ source_desc_c) {
+  if(!verify_ipv4_packet(source_peer, buffer, buflen, source_desc_c))
+    return;
+
   const bool source_is_local = (*source_peer == remote_peer_t());
 
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
@@ -876,7 +937,10 @@ static string helper_ip6a2string(const in6_addr &a) {
 }
 
 [[gnu::hot]]
-static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
+static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, uint16_t buflen, const char *const __restrict__ source_desc_c) {
+  if(!verify_ipv6_packet(source_peer, buffer, buflen, source_desc_c))
+    return;
+
   const bool source_is_local = (*source_peer == remote_peer_t());
 
   const auto h_ip     = reinterpret_cast<struct ip6_hdr*>(buffer);
@@ -1023,26 +1087,6 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
     (ntohl(h_ip->ip6_flow) & 0xFF00000) >> 20}); // this line extracts the Type-Of-Service field from the inclusive flow label field
 }
 
-static uint8_t get_ip_version(const char buffer[], const uint16_t len) {
-  if(len < 2) return 255;
-  return reinterpret_cast<const struct ip*>(buffer)->ip_v;
-}
-
-// function to route a generic IP-whatever packet
-static void route_genip_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
-  typedef void (*genip_route_fn)(const remote_peer_detail_ptr_t&, char * __restrict__, uint16_t, const char * __restrict__);
-  static const unordered_map<uint8_t, genip_route_fn> jt = {
-    { 4, route_packet },
-    { 6, route6_packet },
-  };
-
-  if(*source_peer != remote_peer_t())
-    source_peer->seen = last_time;
-
-  const auto it = jt.find(get_ip_version(buffer, buflen));
-  if(it != jt.end()) (it->second)(source_peer, buffer, buflen, source_desc_c);
-}
-
 // handlers for incoming ZPRN packets
 typedef void (*zprn_v1_handler_t)(const char * const, const remote_peer_ptr_t&, const zprn_v1&);
 
@@ -1178,15 +1222,6 @@ static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * co
   }
 }
 
-static void print_packet(const char buffer[], const uint16_t len) {
-  const auto ubuffer = reinterpret_cast<const uint8_t*>(buffer);
-  printf("ROUTER DEBUG: pktdat:");
-  const uint8_t * const ie = ubuffer + std::min(len, static_cast<uint16_t>(80));
-  for(const uint8_t *i = ubuffer; i != ie; ++i)
-    printf(" %02x", static_cast<unsigned>(*i));
-  puts("");
-}
-
 static bool handle_zprn_v1_pkt(const remote_peer_detail_ptr_t &srca, const char buffer[], const uint16_t len, const char * const __restrict__ source_desc_c) {
   static const unordered_map<uint8_t, zprn_v1_handler_t> dpt = {
     { ZPRN_ROUTEMOD, zprn_v1_routemod_handler },
@@ -1251,59 +1286,6 @@ static bool handle_zprn_pkt(const remote_peer_detail_ptr_t &srca, char buffer[],
   }
 }
 
-static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
-  const uint16_t nread = len;
-  const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
-  const bool srca_is_local = (*srca == remote_peer_detail_t());
-
-  if(srca_is_local)
-    if(const uint16_t dsum = IN_CKSUM(h_ip)) {
-      printf("ROUTER ERROR: invalid ipv4 packet (wrong checksum, chksum = %u, d = %u) from local\n",
-        h_ip->ip_sum, dsum);
-      print_packet(buffer, nread);
-      return false;
-    }
-
-  // get total length
-  len = ntohs(h_ip->ip_len);
-
-  if(zs_unlikely(nread < len)) {
-    printf("ROUTER ERROR: can't read whole ipv4 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
-    print_packet(buffer, nread);
-  } else if(zs_unlikely(!srca_is_local && am_ii_addr(inner_addr_t(h_ip->ip_src.s_addr)))) {
-    printf("ROUTER WARNING: drop packet %u (looped with local as source)\n", ntohs(h_ip->ip_id));
-  } else if(zs_unlikely(nread != len)) {
-    printf("ROUTER WARNING: ipv4 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
-    print_packet(buffer, nread);
-    return true;
-  } else {
-    return true;
-  }
-  return false;
-}
-
-static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
-  const uint16_t nread = len;
-  const auto h_ip = reinterpret_cast<const struct ip6_hdr*>(buffer);
-
-  // get total length
-  len = ntohs(h_ip->ip6_plen) + sizeof(struct ip6_hdr);
-
-  if(zs_unlikely(nread < len)) {
-    printf("ROUTER ERROR: can't read whole ipv6 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
-    print_packet(buffer, nread);
-  } else if(zs_unlikely(*srca != remote_peer_detail_t() && am_ii_addr(inner_addr_t(h_ip->ip6_src)))) {
-    printf("ROUTER WARNING: drop ipv6 packet (looped with local as source)\n");
-  } else {
-    if(zs_unlikely(nread != len)) {
-      printf("ROUTER WARNING: ipv6 packet size differ (size read %u / expected %u) from %s\n", nread, len, source_desc_c);
-      print_packet(buffer, nread);
-    }
-    return true;
-  }
-  return false;
-}
-
 /** read_packet
  * reads an variable length packet
  *
@@ -1320,37 +1302,44 @@ static void read_packet(const int server_fd, remote_peer_detail_ptr_t &srca, cha
   find_or_emplace_peer(remotes, srca);
 }
 
-/** verify_packet
- * verifies an variable length packet
- */
-static bool verify_packet(const remote_peer_detail_ptr_t &srca, char buffer[], uint16_t &len, string &source_desc) {
-  source_desc = get_remote_desc(srca);
-  const auto source_desc_c = source_desc.c_str();
+// function to route a generic packet
+static void route_genip_packet(const remote_peer_detail_ptr_t &srca, char buffer[], const uint16_t len) {
+  typedef void (*genip_route_fn)(const remote_peer_detail_ptr_t&, char * __restrict__, uint16_t, const char * __restrict__);
+  static const unordered_map<uint8_t, genip_route_fn> jt = {
+    { 4, route_packet },
+    { 6, route6_packet },
+  };
 
-  switch(const auto ipver = get_ip_version(buffer, len)) {
+  srca->seen = last_time;
+  const string source_desc = get_remote_desc(srca);
+  const auto source_desc_c = source_desc.c_str();
+  const auto ipver = (len < 2) ? 255 : reinterpret_cast<const struct ip*>(buffer)->ip_v;
+
+  switch(ipver) {
     case 0:
       if(!handle_zprn_pkt(srca, buffer, len, source_desc_c))
         printf("ROUTER ERROR: got invalid ZPRN packet from %s\n", source_desc_c);
-      break;
+      return;
 
     case 4:
       if(sizeof(struct ip) > len)
         goto length_error;
-      return verify_ipv4_packet(srca, buffer, len, source_desc_c);
+      route_packet(srca, buffer, len, source_desc_c);
+      return;
 
     case 6:
       if(sizeof(struct ip6_hdr) > len)
         goto length_error;
-      return verify_ipv6_packet(srca, buffer, len, source_desc_c);
+      route6_packet(srca, buffer, len, source_desc_c);
+      return;
 
     default:
       printf("ROUTER ERROR: received a packet with unknown payload type (wrong ip_ver = %u) from %s\n", ipver, source_desc_c);
+      return;
   }
-  return false;
 
   length_error:
     printf("ROUTER ERROR: received invalid ip packet (too small, size = %u) from %s\n", len, source_desc_c);
-    return false;
 }
 
 static string format_time(const time_t x) {
@@ -1517,7 +1506,7 @@ int main(int argc, char *argv[]) {
       epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, ep_timeout);
 
       if(epevcnt == -1) {
-        if(errno == EINTR) continue;
+        if(zs_likely(errno == EINTR)) continue;
         perror("epoll_wait()");
         retcode = 1;
         break;
@@ -1526,7 +1515,6 @@ int main(int argc, char *argv[]) {
       uint16_t nread = BUFSIZE;
       alignas(2) char buffer[BUFSIZE];
       remote_peer_detail_ptr_t peer_ptr;
-      string source_desc;
 
       for(int i = 0; i < epevcnt; ++i) {
         if(!(epevents[i].events & EPOLLIN)) continue;
@@ -1539,13 +1527,14 @@ int main(int argc, char *argv[]) {
           // data from the network: read it, and write it to the tun/tap interface.
           read_packet(cur_fd, peer_ptr, buffer, nread);
         }
-        if(nread && verify_packet(peer_ptr, buffer, nread, source_desc))
-          route_genip_packet(peer_ptr, buffer, nread, source_desc.c_str());
+        if(nread)
+          route_genip_packet(peer_ptr, buffer, nread);
       }
 
-      // only cleanup things if at least 1 second passed since last iteration
+      // only cleanup things if at least 1/4 remote_timeout passed since last iteration
       last_time = time(nullptr);
-      if(last_time == pastt) continue;
+      if(zs_likely((last_time - zprd_conf.remote_timeout / 4) <= pastt))
+        continue;
     }
 
     for(auto it = remotes.cbegin(); it != remotes.cend(); ++it) {
