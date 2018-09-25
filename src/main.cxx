@@ -1286,22 +1286,6 @@ static bool handle_zprn_pkt(const remote_peer_detail_ptr_t &srca, char buffer[],
   }
 }
 
-/** read_packet
- * reads an variable length packet
- *
- * @param srca    (in/out) the source ip (router)
- * @param buffer  (out) the target storage (with size len)
- * @param len     (in/out) the length of the packet
- **/
-static void read_packet(const int server_fd, remote_peer_detail_ptr_t &srca, char buffer[], uint16_t &len) {
-  // create new shared_ptr, so that we don't overwrite previous src'peer
-  srca = make_shared<remote_peer_detail_t>();
-  len  = recv_n(server_fd, buffer, len, &srca->saddr);
-
-  // resolve remote --> shared_ptr
-  find_or_emplace_peer(remotes, srca);
-}
-
 // function to route a generic packet
 static void route_genip_packet(const remote_peer_detail_ptr_t &srca, char buffer[], const uint16_t len) {
   srca->seen = last_time;
@@ -1506,20 +1490,25 @@ int main(int argc, char *argv[]) {
         break;
       }
 
-      uint16_t nread = BUFSIZE;
       alignas(2) char buffer[BUFSIZE];
-      remote_peer_detail_ptr_t peer_ptr;
 
       for(int i = 0; i < epevcnt; ++i) {
         if(!(epevents[i].events & EPOLLIN)) continue;
         const int cur_fd = epevents[i].data.fd;
+        remote_peer_detail_ptr_t peer_ptr;
+        uint16_t nread;
         if(cur_fd == local_fd) {
           // data from tun/tap: just read it and write it to the network
-          nread = cread(local_fd, buffer, BUFSIZE);
           peer_ptr = local_router;
+          nread = cread(local_fd, buffer, BUFSIZE);
         } else {
           // data from the network: read it, and write it to the tun/tap interface.
-          read_packet(cur_fd, peer_ptr, buffer, nread);
+          // create new shared_ptr, so that we don't overwrite previous src'peer
+          peer_ptr = make_shared<remote_peer_detail_t>();
+          nread = recv_n(cur_fd, buffer, BUFSIZE, &peer_ptr->saddr);
+
+          // resolve remote --> shared_ptr
+          find_or_emplace_peer(remotes, peer_ptr);
         }
         if(nread)
           route_genip_packet(peer_ptr, buffer, nread);
