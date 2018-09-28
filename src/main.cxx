@@ -1436,10 +1436,16 @@ int main(int argc, char *argv[]) {
           route_genip_packet(peer_ptr, buffer, nread);
       }
 
-      // only cleanup things if at least 1/4 remote_timeout passed since last iteration
       last_time = time(nullptr);
-      if(zs_likely((last_time - zprd_conf.remote_timeout / 4) <= pastt))
+      if(zs_likely(last_time == pastt))
         continue;
+      // only cleanup things if at least 1/4 remote_timeout passed since last iteration
+      if(zs_likely((last_time - zprd_conf.remote_timeout / 4) <= pastt)) {
+        // flush output once a second
+        fflush(stdout);
+        fflush(stderr);
+        continue;
+      }
     }
 
     for(auto it = remotes.cbegin(); it != remotes.cend(); ++it) {
