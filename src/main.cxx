@@ -666,18 +666,6 @@ static auto get_peers() {
   return ret;
 }
 
-static void send_zprn_msg(const zprn_v1 &msg) {
-  auto peers = get_peers();
-
-  // split horizon
-  if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
-    if(const auto r = have_route(inner_addr_t(msg.zprn_un.route.dsta)))
-      rem_peer(peers, r->get_router());
-
-  const auto msgptr = reinterpret_cast<const char *>(&msg);
-  sender.enqueue(send_data{{msgptr, msgptr + sizeof(msg)}, move(peers)});
-}
-
 static void send_zprn_msg(const zprn_v2 &msg) {
   auto peers = get_peers();
 
@@ -1088,56 +1076,6 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
 }
 
 // handlers for incoming ZPRN packets
-typedef void (*zprn_v1_handler_t)(const char * const, const remote_peer_ptr_t&, const zprn_v1&);
-
-static void zprn_v1_routemod_handler(const char *const source_desc_c, const remote_peer_ptr_t &srca, const zprn_v1 &d) {
-  const auto dsta = d.zprn_un.route.dsta;
-  if(d.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
-    // add route
-    if(routes[inner_addr_t(dsta)].add_router(srca, d.zprn_prio + 1))
-      printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
-    return;
-  }
-
-  // delete route
-  const auto r = have_route(dsta);
-  if(r && r->del_router(srca))
-    printf("ROUTER: delete route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
-
-  zprn_v1 msg;
-  msg.zprn_cmd = ZPRN_ROUTEMOD;
-  msg.zprn_un.route.dsta = dsta;
-
-  if(am_ii_addr(inner_addr_t(dsta), false)) // a route to us is deleted (and we know we are here)
-    msg.zprn_prio = 0;
-  else if(r && !r->empty()) // we have a route
-    msg.zprn_prio = r->_routers.front().hops;
-  else
-    return;
-
-  send_zprn_msg(msg);
-}
-
-static void zprn_v1_connmgmt_handler(const char *const source_desc_c, const remote_peer_ptr_t &srca, const zprn_v1 &d) noexcept {
-  const auto dsta = d.zprn_un.route.dsta;
-  if(d.zprn_prio == ZPRN_CONNMGMT_OPEN) {
-    if(routes[inner_addr_t(dsta)].add_router(srca, 1))
-      printf("ROUTER: add route to %s via %s (notified)\n", inet_ntoa({dsta}), source_desc_c);
-    return;
-  }
-
-  for(auto &r: routes) {
-    const string dest_name = r.first.to_string();
-    if(r.second.del_router(srca))
-      printf("ROUTER: delete route to %s via %s (notified)\n", dest_name.c_str(), source_desc_c);
-  }
-
-  if(const auto r = have_route(dsta)) {
-    r->_routers.clear();
-    printf("ROUTER: delete route to %s (notified)\n", inet_ntoa({dsta}));
-  }
-}
-
 typedef void (*zprn_v2_handler_t)(const remote_peer_ptr_t&, const char * const, const zprn_v2&);
 
 static void zprn_v2_routemod_handler(const remote_peer_ptr_t &srca, const char * const source_desc_c, const zprn_v2 &d) noexcept {
@@ -1222,20 +1160,6 @@ static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * co
   }
 }
 
-static bool handle_zprn_v1_pkt(const remote_peer_detail_ptr_t &srca, const char buffer[], const uint16_t len, const char * const __restrict__ source_desc_c) {
-  static const unordered_map<uint8_t, zprn_v1_handler_t> dpt = {
-    { ZPRN_ROUTEMOD, zprn_v1_routemod_handler },
-    { ZPRN_CONNMGMT, zprn_v1_connmgmt_handler },
-  };
-  const auto &d_zprn = *reinterpret_cast<const struct zprn_v1*>(buffer);
-  if(sizeof(struct zprn_v1) <= len && d_zprn.valid()) {
-    const auto it = dpt.find(d_zprn.zprn_cmd);
-    if(zs_likely(it != dpt.end())) it->second(source_desc_c, srca, d_zprn);
-    return true;
-  }
-  return false;
-}
-
 static bool handle_zprn_v2_pkt(const remote_peer_detail_ptr_t &srca, char buffer[], const uint16_t len, const char * const __restrict__ source_desc_c) {
   static const unordered_map<uint8_t, zprn_v2_handler_t> dpt = {
     { ZPRN_ROUTEMOD, zprn_v2_routemod_handler },
@@ -1279,10 +1203,8 @@ static bool handle_zprn_pkt(const remote_peer_detail_ptr_t &srca, char buffer[],
   if(len < 4 || buffer[0])
     return false;
   switch(buffer[1]) {
-    case 1: return handle_zprn_v1_pkt(srca, buffer, len, source_desc_c);
-    case 2: return handle_zprn_v2_pkt(srca, buffer, len, source_desc_c);
-    default:
-      return false;
+    case 2:  return handle_zprn_v2_pkt(srca, buffer, len, source_desc_c);
+    default: return false;
   }
 }
 
