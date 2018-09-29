@@ -1392,18 +1392,20 @@ int main(int argc, char *argv[]) {
   const int ep_timeout = 2000 * zprd_conf.remote_timeout;
   int retcode = 0;
 
+  /* last_time - global time, updated after select
+     pastt     - time before epoll_wait
+     pastt_clu - time before epoll_wait, when last cleanup ran
+   */
+  time_t pastt_clu = last_time;
+
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
   vector<bool> found_remotes(zprd_conf.remotes.size(), false);
 #define MAX_EVENTS 32
   struct epoll_event epevents[MAX_EVENTS];
 
   while(!b_do_shutdown) {
-    /* last_time - global time, updated after select
-       pastt     - time before select
-      */
-    { // use select() to handle two descriptors at once
-      const auto pastt = last_time;
-
+    {
+      const time_t pastt = last_time;
       const int epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, ep_timeout);
 
       if(epevcnt == -1) {
@@ -1441,7 +1443,7 @@ int main(int argc, char *argv[]) {
       if(zs_likely(last_time == pastt))
         continue;
       // only cleanup things if at least 1/4 remote_timeout passed since last iteration
-      if(zs_likely((last_time - zprd_conf.remote_timeout / 4) <= pastt)) {
+      if(zs_likely((last_time - zprd_conf.remote_timeout / 4) <= pastt_clu)) {
         // flush output once a second
         fflush(stdout);
         fflush(stderr);
@@ -1517,6 +1519,7 @@ int main(int argc, char *argv[]) {
     }
 
     sort_peers();
+    pastt_clu = last_time;
 
     // flush output
     fflush(stdout);
