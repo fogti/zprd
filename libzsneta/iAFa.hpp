@@ -42,6 +42,8 @@ struct inner_addr_t {
   inner_addr_t(const inner_addr_t &o) noexcept;
   inner_addr_t(const sockaddr_storage &o) noexcept;
 
+  inner_addr_t& operator=(const inner_addr_t &o) noexcept;
+
   // convert from IPv4 address
   explicit inner_addr_t(const uint32_t ip4a) noexcept;
 
@@ -62,6 +64,8 @@ struct xner_addr_t final : inner_addr_t {
   xner_addr_t(const xner_addr_t &o) noexcept;
   xner_addr_t(const inner_addr_t &o, size_t pflen) noexcept;
   xner_addr_t(const sockaddr_storage &o, const sockaddr_storage &netmask) noexcept;
+
+  xner_addr_t& operator=(const xner_addr_t &o) noexcept;
   void set_pflen(size_t pflen) noexcept;
 
  private:

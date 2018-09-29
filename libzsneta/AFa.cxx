@@ -44,16 +44,13 @@ auto AFa_addr2string(const sa_family_t sa_fam, const char *addr) -> string {
   return {buf};
 }
 
-auto AFa_port2string(const uint16_t *sanport) -> string {
-  return sanport ? ui162string(ntohs(*sanport)) : string("(null)");
-}
-
 [[gnu::hot]]
 auto AFa_sa2string(const struct sockaddr_storage &sas, string &&prefix) noexcept -> string {
   if(!sas.ss_family) return "local";
   string ret = move(prefix);
   ret += AFa_addr2string(sas.ss_family, AFa_gp_addr(sas));
   ret += ':';
-  ret += AFa_port2string(AFa_gp_port(sas));
+  const uint16_t * const sanport = AFa_gp_port(sas);
+  ret += sanport ? ui162string(ntohs(*sanport)) : string("(null)");
   return ret;
 }

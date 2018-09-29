@@ -299,14 +299,6 @@ void DeathHandler::set_generate_core_dump(bool value) {
   generate_core_dump_ = value;
 }
 
-bool DeathHandler::cleanup() const {
-  return cleanup_;
-}
-
-void DeathHandler::set_cleanup(bool value) {
-  cleanup_ = value;
-}
-
 #ifdef QUICK_EXIT
 bool DeathHandler::quick_exit() const {
   return quick_exit_;
@@ -316,63 +308,6 @@ void DeathHandler::set_quick_exit(bool value) {
   quick_exit_ = value;
 }
 #endif
-
-int DeathHandler::frames_count() const {
-  return frames_count_;
-}
-
-void DeathHandler::set_frames_count(int value) {
-  assert(value > 0 && value <= 100);
-  frames_count_ = value;
-}
-
-bool DeathHandler::cut_common_path_root() const {
-  return cut_common_path_root_;
-}
-
-void DeathHandler::set_cut_common_path_root(bool value) {
-  cut_common_path_root_ = value;
-}
-
-bool DeathHandler::cut_relative_paths() const {
-  return cut_relative_paths_;
-}
-
-void DeathHandler::set_cut_relative_paths(bool value) {
-  cut_relative_paths_ = value;
-}
-
-bool DeathHandler::append_pid() const {
-  return append_pid_;
-}
-
-void DeathHandler::set_append_pid(bool value) {
-  append_pid_ = value;
-}
-
-bool DeathHandler::color_output() const {
-  return color_output_;
-}
-
-void DeathHandler::set_color_output(bool value) {
-  color_output_ = value;
-}
-
-bool DeathHandler::thread_safe() const {
-  return thread_safe_;
-}
-
-void DeathHandler::set_thread_safe(bool value) {
-  thread_safe_ = value;
-}
-
-DeathHandler::OutputCallback DeathHandler::output_callback() const {
-  return output_callback_;
-}
-
-void DeathHandler::set_output_callback(DeathHandler::OutputCallback value) {
-  output_callback_ = value;
-}
 
 INLINE static void safe_abort() {
   struct sigaction sa;

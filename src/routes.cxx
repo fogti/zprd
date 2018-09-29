@@ -53,42 +53,6 @@ void route_via_t::update_router(const remote_peer_ptr_t &router, const uint8_t h
   it->latency = latency;
 }
 
-/** replace_router:
- *
- * invariant: rold != rnew
- * timing:    O(n)      (all routers except if we reach both rold + rnew before)
- *
- * @param rold, rnew    old and new router addr
- **/
-void route_via_t::replace_router(const remote_peer_ptr_t &rold, const remote_peer_ptr_t &rnew) noexcept {
-  const auto it_e = _routers.end();
-  auto it_ob = it_e; // (iterator to old router) - 1
-  bool nf = true;    // new router not found?
-
-  for(auto it = _routers.begin(), itb = _routers.before_begin(); it != it_e; ++it, ++itb) {
-    if(it->addr == rold)
-      it_ob = itb;
-    else if(it->addr == rnew)
-      nf = false;
-    else
-      continue;
-
-    if(!(nf || it_ob == it_e))
-      break;
-  }
-
-  if(it_ob == it_e) {
-    // found [!o ?n]
-  } else if(nf) {
-    // found [o !n]
-    ++it_ob;
-    it_ob->addr = rnew;
-  } else {
-    // found [o n]
-    _routers.erase_after(it_ob);
-  }
-}
-
 bool route_via_t::del_router(const remote_peer_ptr_t &router) noexcept {
   bool ret = false;
   _routers.remove_if(

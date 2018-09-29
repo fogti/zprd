@@ -39,18 +39,9 @@ class route_via_t final {
 
   // add or modify a router
   bool add_router(const remote_peer_ptr_t &router, const uint8_t hops);
-
   void update_router(const remote_peer_ptr_t &router, const uint8_t hops, const double latency) noexcept;
 
-  /** replace_router:
-   *
-   * invariant: rold != rnew
-   * timing:    O(n)      (all routers except if we reach both rold + rnew before)
-   *
-   * @param rold, rnew    old and new router addr
-   **/
-  void replace_router(const remote_peer_ptr_t &rold, const remote_peer_ptr_t &rnew) noexcept;
-
+  // del_router: ASYMMETRY WARNING: deletes *exactly* this router pointer
   bool del_router(const remote_peer_ptr_t &router) noexcept;
 
   void del_primary_router() noexcept

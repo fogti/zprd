@@ -52,7 +52,6 @@ typedef std::shared_ptr<remote_peer_t> remote_peer_ptr_t;
 bool operator==(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept;
 bool operator!=(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept;
 bool operator< (const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept;
-bool operator> (const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept;
 
 struct remote_peer_detail_t : remote_peer_t {
   time_t seen;

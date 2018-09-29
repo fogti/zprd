@@ -1390,7 +1390,7 @@ int main(int argc, char *argv[]) {
   my_signal(SIGTERM, do_shutdown);
 
   const int ep_timeout = 2000 * zprd_conf.remote_timeout;
-  int retcode = 0, epevcnt;
+  int retcode = 0;
 
   // define the peer transaction temp vars outside of the loop to avoid unnecessarily mem allocs
   vector<bool> found_remotes(zprd_conf.remotes.size(), false);
@@ -1404,7 +1404,7 @@ int main(int argc, char *argv[]) {
     { // use select() to handle two descriptors at once
       const auto pastt = last_time;
 
-      epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, ep_timeout);
+      const int epevcnt = epoll_wait(epoll_fd, epevents, MAX_EVENTS, ep_timeout);
 
       if(epevcnt == -1) {
         if(zs_likely(errno == EINTR)) continue;

@@ -100,20 +100,6 @@ class DeathHandler {
   /// SIGSEGV and SIGABRT signal handlers are removed.
   ~DeathHandler();
 
-  /// @brief Sets the value of cleanup property.
-  /// @details If cleanup is set to true, program attempts to run all static
-  /// destructors and atexit() callbacks before terminating. If
-  /// generate_core_dump is set to true, this property is ignored.
-  /// @note Default value of this property is true.
-  bool cleanup() const;
-
-  /// @brief Returns the value of cleanup property.
-  /// @details If cleanup is set to true, program attempts to run all static
-  /// destructors and atexit() callbacks before terminating. If
-  /// generate_core_dump is set to true, this property is ignored.
-  /// @note Default value of this property is true.
-  void set_cleanup(bool value);
-
   /// @brief Returns the current value of generate_core_dump property.
   /// @details If generate_core_dump is set to true, a core dump will
   /// be generated when the program terminates. This behavior
@@ -149,74 +135,6 @@ class DeathHandler {
   /// @note Default value is false.
   void set_quick_exit(bool value);
 #endif
-
-  /// @brief Returns the depth of the stack trace.
-  /// @note Default value is 16.
-  int frames_count() const;
-
-  /// @brief Sets the depth of the stack trace. Accepted range is 1..100.
-  /// @note Default value is 16.
-  void set_frames_count(int value);
-
-  /// @brief Returns the value indicating whether to shorten stack trace paths
-  /// by cutting off the common root between each path and the current working
-  /// directory.
-  /// @note Default value is true.
-  bool cut_common_path_root() const;
-
-  /// @brief Sets the value indicating whether to shorten stack trace paths
-  /// by cutting off the common root between each path and the current working
-  /// directory.
-  /// @note Default value is true.
-  void set_cut_common_path_root(bool value);
-
-  /// @brief Returns the value indicating whether to shorten stack trace paths
-  /// by cutting off the relative part (e.g., "../../..").
-  /// @note Default value is true.
-  bool cut_relative_paths() const;
-
-  /// @brief Sets the value indicating whether to shorten stack trace paths
-  /// by cutting off the relative part (e.g., "../../..").
-  /// @note Default value is true.
-  void set_cut_relative_paths(bool value);
-
-  /// @brief Returns the value indicating whether to append the process id
-  /// to each stack trace line.
-  /// @note Default value is false.
-  bool append_pid() const;
-
-  /// @brief Sets the value indicating whether to append the process id
-  /// to each stack trace line.
-  /// @note Default value is false.
-  void set_append_pid(bool value);
-
-  /// @brief Returns the value indicating whether to color the output
-  /// with ANSI escape sequences.
-  /// @note Default value is true.
-  bool color_output() const;
-
-  /// @brief Sets the value indicating whether to color the output
-  /// with ANSI escape sequences.
-  /// @note Default value is true.
-  void set_color_output(bool value);
-
-  /// @brief Returns the value indicating whether to do a thread-safe
-  /// stack trace printing, stopping all running threads by forking.
-  /// @note Default value is true.
-  bool thread_safe() const;
-
-  /// @brief Sets the value indicating whether to do a thread-safe stack trace
-  /// printing, stopping all running threads by forking.
-  /// @note Default value is true.
-  void set_thread_safe(bool value);
-
-  /// @brief Returns the current output callback.
-  /// @note Default value is write to stderr.
-  OutputCallback output_callback() const;
-
-  /// @brief Changes output callback (that is, how to write the trace, etc.).
-  /// @note Default value is write to stderr.
-  void set_output_callback(OutputCallback value);
 
  private:
   friend void* ::__malloc_impl(size_t);

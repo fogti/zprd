@@ -29,8 +29,6 @@ bool operator!=(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
   { return compare_peers(lhs, rhs); }
 bool operator<(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
   { return compare_peers(lhs, rhs) < 0; }
-bool operator>(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
-  { return compare_peers(lhs, rhs) > 0; }
 
 auto remote_peer_t::get_saddr() const noexcept -> sockaddr_storage {
   std::shared_lock<_mtx_t> lock(_mtx);

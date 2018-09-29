@@ -49,6 +49,14 @@ inner_addr_t::inner_addr_t(const in6_addr ip6a) noexcept : type(IAFA_AT_INET6) {
   partial_memcpy_lazy<sizeof(addr), decltype(ip6a)>(addr, &ip6a);
 }
 
+inner_addr_t& inner_addr_t::operator=(const inner_addr_t &o) noexcept {
+  if(this != &o) {
+    type = o.type;
+    partial_memcpy_bytes<sizeof(addr)>(addr, o.addr, o.get_alen());
+  }
+  return *this;
+}
+
 size_t inner_addr_t::get_alen() const noexcept {
   return pli_at2alen(type);
 }
@@ -91,6 +99,14 @@ bool operator!=(const xner_addr_t &lhs, const xner_addr_t &rhs) noexcept
 xner_addr_t::xner_addr_t(const xner_addr_t &o) noexcept : inner_addr_t() {
   type = o.type;
   i_set2am(o.addr, o.nmsk);
+}
+
+xner_addr_t& xner_addr_t::operator=(const xner_addr_t &o) noexcept {
+  if(this != &o) {
+    type = o.type;
+    i_set2am(o.addr, o.nmsk);
+  }
+  return *this;
 }
 
 xner_addr_t::xner_addr_t(const inner_addr_t &o, const size_t pflen) noexcept
