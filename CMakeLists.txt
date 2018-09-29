@@ -15,6 +15,10 @@ option(USE_DEBUG "enable debug support" OFF)
 find_package(Threads REQUIRED)
 find_package(LowlevelZS REQUIRED)
 
+if(USE_IPX)
+  find_library(LIBRARY_IPX NAMES ipx ncp)
+endif()
+
 include(CheckCSourceCompiles)
 include(CheckCXXSourceCompiles)
 check_c_source_compiles(
@@ -43,15 +47,15 @@ if(USE_DEBUG)
   include_directories(3rdparty/DeathHandler)
 endif()
 
-add_library(zsneta SHARED libzsneta/AFa.cxx libzsneta/iAFa.cxx)
+add_library(zsneta SHARED libzsneta/AFa.cxx libzsneta/iAFa.cxx libzsneta/oAFa.cxx)
 target_link_libraries(zsneta LowlevelZS::lowlevelzs)
 
 if(USE_IPX)
-  target_link_libraries(zsneta -lipx)
+  target_link_libraries(zsneta "${LIBRARY_IPX}")
 endif()
 
 install(TARGETS zsneta DESTINATION "${INSTALL_LIB_DIR}")
-install(FILES libzsneta/AFa.hpp libzsneta/iAFa.hpp DESTINATION "${INSTALL_INCLUDE_DIR}/libzsneta")
+install(FILES libzsneta/AFa.hpp libzsneta/iAFa.hpp libzsneta/oAFa.hpp DESTINATION "${INSTALL_INCLUDE_DIR}/libzsneta")
 
 add_executable(zprd src/main.cxx src/cksum.c src/crw.c
                     src/ping_cache.cxx src/remote_peer.cxx src/remote_peer_detail.cxx

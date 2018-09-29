@@ -6,6 +6,7 @@
  * License: GPL-2+
  **/
 #include "iAFa.hpp"
+#include "oAFa.hpp"
 #include "AFa.hpp"
 #include <string.h>
 #include <memut.hpp>

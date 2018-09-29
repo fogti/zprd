@@ -28,9 +28,6 @@ class remote_peer_t : public std::enable_shared_from_this<remote_peer_t> {
   remote_peer_t(remote_peer_t &&o) noexcept;
   remote_peer_t(const remote_peer_t &o) noexcept = delete;
 
-  // convert saddr to a string
-  auto addr2string(std::string &&prefix = {}) const -> std::string;
-
   // generic access methods, locked
   auto get_saddr() const noexcept -> sockaddr_storage;
   void set_saddr(const sockaddr_storage &sas, bool do_lock = true) noexcept;

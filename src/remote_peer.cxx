@@ -6,7 +6,7 @@
  **/
 
 #include "remote_peer.hpp"
-#include "AFa.hpp"
+#include "oAFa.hpp"
 #include "memut.hpp"
 
 #include <stdio.h>
@@ -31,18 +31,6 @@ bool operator<(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
   { return compare_peers(lhs, rhs) < 0; }
 bool operator>(const remote_peer_t &lhs, const remote_peer_t &rhs) noexcept
   { return compare_peers(lhs, rhs) > 0; }
-
-using std::string;
-
-[[gnu::hot]]
-auto remote_peer_t::addr2string(string &&prefix) const -> string {
-  if(!saddr.ss_family) return "local";
-  string ret = move(prefix);
-  ret += AFa_addr2string(saddr.ss_family, AFa_gp_addr(saddr));
-  ret += ':';
-  ret += AFa_port2string(AFa_gp_port(saddr));
-  return ret;
-}
 
 auto remote_peer_t::get_saddr() const noexcept -> sockaddr_storage {
   std::shared_lock<_mtx_t> lock(_mtx);

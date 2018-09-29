@@ -47,7 +47,8 @@
 
 // own parts
 #include <config.h>
-#include "AFa.hpp"
+#include "AFa.hpp"            // AFa_addr2string
+#include "oAFa.hpp"
 #include "crest.h"
 #include "crw.h"
 #include "memut.hpp"
@@ -159,7 +160,7 @@ static void connect2server(const string &r, const size_t cent) {
   auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
   ptr->set_port_if_unset(zprd_conf.data_port, false);
   {
-    const string remote_desc = ptr->addr2string();
+    const string remote_desc = AFa_sa2string(ptr->saddr);
     printf("CLIENT: connected to server %s\n", remote_desc.c_str());
   }
   remotes.emplace_back(move(ptr));
@@ -432,7 +433,7 @@ static bool init_all(const string &confpath) {
 [[gnu::hot]]
 static string get_remote_desc(const remote_peer_ptr_t &addr) {
   // we don't need a read-only-lock, as we are in the only thread that writes to remotes
-  return addr->addr2string("peer ");
+  return AFa_sa2string(addr->saddr, "peer ");
 }
 
 [[gnu::hot]]
@@ -1253,7 +1254,7 @@ static void print_routing_table(int) {
   puts("-- connected peers:");
   puts("Peer\t\tSeen\t\tConfig Entry");
   for(const auto &i: remotes) {
-    const string addr = i->addr2string();
+    const string addr = AFa_sa2string(i->saddr);
     const auto seen = format_time(i->seen);
     printf("%s\t%s\t", addr.c_str(), seen.c_str());
     puts(i->cfgent_name());
@@ -1263,7 +1264,7 @@ static void print_routing_table(int) {
   for(const auto &i: routes) {
     const string dest = i.first.to_string();
     for(const auto &r: i.second._routers) {
-      const string seen = format_time(r.seen), gateway = r.addr->addr2string();
+      const string seen = format_time(r.seen), gateway = AFa_sa2string(r.addr->saddr);
       printf("%s\t%s\t%s\t%4.2f\t%u\n", dest.c_str(), gateway.c_str(), seen.c_str(), r.latency, static_cast<unsigned>(r.hops));
     }
   }
