@@ -9,7 +9,7 @@
 #include "oAFa.hpp"
 #include "AFa.hpp"
 #include <string.h>
-#include <memut.hpp>
+#include <zs/ll/memut.hpp>
 
 using namespace std;
 

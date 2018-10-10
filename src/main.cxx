@@ -51,7 +51,6 @@
 #include "oAFa.hpp"
 #include "crest.h"
 #include "crw.h"
-#include "memut.hpp"
 #include "ping_cache.hpp"
 #include "remote_peer.hpp"
 #include "resolve.hpp"
@@ -61,6 +60,7 @@
 #include "zprn.hpp"
 
 // -lowlevelzs
+#include <zs/ll/memut.hpp>
 #include <zs/ll/zsig.h>
 
 #ifdef USE_DEBUG

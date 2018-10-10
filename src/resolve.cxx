@@ -6,7 +6,7 @@
 
 #define __USE_MISC 1
 #include "resolve.hpp"
-#include "memut.hpp"
+#include <zs/ll/memut.hpp>
 #include <config.h>
 #include <stdio.h>  // printf
 #include <netdb.h>  // getaddrinfo

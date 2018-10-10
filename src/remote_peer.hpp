@@ -9,10 +9,11 @@
 #include <stddef.h>     // size_t
 #include <time.h>       // time_t
 
-#include <memut.hpp>
 #include <memory>
 #include <shared_mutex>
 #include <string>
+
+#include <zs/ll/memut.hpp> // zeroify
 
 class remote_peer_t : public std::enable_shared_from_this<remote_peer_t> {
  protected:
