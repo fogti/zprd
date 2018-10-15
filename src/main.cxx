@@ -138,7 +138,7 @@ static bool setup_server_fd(const sa_family_t sa_family) {
     goto error;
   }
 
-  if(bind(server_fd, reinterpret_cast<struct sockaddr*>(&ss), sizeof(ss)) < 0) {
+  if(::bind(server_fd, reinterpret_cast<struct sockaddr*>(&ss), sizeof(ss)) < 0) {
     perror("bind()");
     goto error;
   }
@@ -1085,7 +1085,7 @@ static void zprn_v2_routemod_handler(const remote_peer_ptr_t &srca, const char *
   const char * const ddcs = dstdesc.c_str();
   if(d.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
     // add route
-    if(routes[dsta].add_router(srca, d.zprn_prio + 1))
+    if(!am_ii_addr(dsta) && routes[dsta].add_router(srca, d.zprn_prio + 1))
       printf("ROUTER: add route to %s via %s (notified)\n", ddcs, source_desc_c);
     return;
   }
@@ -1111,7 +1111,7 @@ static void zprn_v2_connmgmt_handler(const remote_peer_ptr_t &srca, const char *
   const string dstdesc = dsta.to_string();
   const char * const ddcs = dstdesc.c_str();
   if(d.zprn_prio == ZPRN_CONNMGMT_OPEN) {
-    if(routes[dsta].add_router(srca, 1))
+    if(!am_ii_addr(dsta) && routes[dsta].add_router(srca, 1))
       printf("ROUTER: add route to %s via %s (notified)\n", ddcs, source_desc_c);
     return;
   }
@@ -1156,7 +1156,7 @@ static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * co
     sender.enqueue(zprn2_sdat{msg, {srca}});
   } else {
     // got probe response
-    if(routes[dsta].add_router(srca, d.zprn_prio + 1))
+    if(!am_ii_addr(dsta) && routes[dsta].add_router(srca, d.zprn_prio + 1))
       printf("ROUTER: refresh route to %s via %s (notified)\n", ddcs, source_desc_c);
   }
 }
