@@ -1112,7 +1112,7 @@ static void zprn_v2_connmgmt_handler(const remote_peer_ptr_t &srca, const char *
   const char * const ddcs = dstdesc.c_str();
   if(d.zprn_prio == ZPRN_CONNMGMT_OPEN) {
     if(!am_ii_addr(dsta) && routes[dsta].add_router(srca, 1))
-      printf("ROUTER: add route to %s via %s (notified)\n", ddcs, source_desc_c);
+      printf("ROUTER: add route to %s via %s with %u hops (notified)\n", ddcs, source_desc_c, 1);
     return;
   }
 
