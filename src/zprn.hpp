@@ -13,7 +13,6 @@
 #define ZPRN_RESULT   0x02
 #define ZPRN2_PROBE 0x03
 // priority / negation / hop count
-#define ZPRN_ROUTEMOD_DELETE 0xFF
 #define ZPRN_CONNMGMT_OPEN   0x00
 #define ZPRN_CONNMGMT_CLOSE  0xFF
 #define ZPRN_RESULT_OK       0x00

@@ -671,7 +671,7 @@ static void send_zprn_msg(const zprn_v2 &msg) {
   auto peers = get_peers();
 
   // split horizon
-  if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != ZPRN_ROUTEMOD_DELETE)
+  if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != 0xff)
     if(const auto r = have_route(msg.route))
       rem_peer(peers, r->get_router());
 
@@ -1083,10 +1083,10 @@ static void zprn_v2_routemod_handler(const remote_peer_ptr_t &srca, const char *
   const auto &dsta = d.route;
   const string dstdesc = dsta.to_string();
   const char * const ddcs = dstdesc.c_str();
-  if(d.zprn_prio != ZPRN_ROUTEMOD_DELETE) {
+  if(d.zprn_prio != 0xff) {
     // add route
     if(!am_ii_addr(dsta) && routes[dsta].add_router(srca, d.zprn_prio + 1))
-      printf("ROUTER: add route to %s via %s (notified)\n", ddcs, source_desc_c);
+      printf("ROUTER: add route to %s via %s with %u hops (notified)\n", ddcs, source_desc_c, static_cast<unsigned>(d.zprn_prio + 1));
     return;
   }
 
@@ -1496,7 +1496,7 @@ int main(int argc, char *argv[]) {
       if(iee || ise._fresh_add) {
         ise._fresh_add = false;
         msg.zprn_cmd = ZPRN_ROUTEMOD;
-        msg.zprn_prio = (iee ? ZPRN_ROUTEMOD_DELETE : ise._routers.front().hops);
+        msg.zprn_prio = (iee ? 0xff : ise._routers.front().hops);
         send_zprn_msg(msg);
       } else if(!iee && ise._routers.front().seen < route_probe_tin) {
         msg.zprn_cmd = ZPRN2_PROBE;
