@@ -157,7 +157,7 @@ static void connect2server(const string &r, const size_t cent) {
   zeroify(remote);
   if(!resolve_hostname(r, remote, zprd_conf.preferred_af))
     return;
-  auto ptr = make_shared<remote_peer_detail_t>(remote_peer_t(remote), cent);
+  auto ptr = make_shared<remote_peer_detail_t>(remote, cent);
   ptr->set_port_if_unset(zprd_conf.data_port, false);
   {
     const string remote_desc = AFa_sa2string(ptr->saddr);
@@ -690,7 +690,7 @@ static void print_packet(const char buffer[], const uint16_t len) {
 static bool verify_ipv4_packet(const remote_peer_detail_ptr_t &srca, const char buffer[], uint16_t &len, const char *source_desc_c) {
   const uint16_t nread = len;
   const auto h_ip = reinterpret_cast<const struct ip*>(buffer);
-  const bool srca_is_local = (*srca == remote_peer_detail_t());
+  const bool srca_is_local = srca->is_local();
 
   if(srca_is_local)
     if(const uint16_t dsum = IN_CKSUM(h_ip)) {
@@ -726,7 +726,7 @@ static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char 
   if(zs_unlikely(nread < len)) {
     printf("ROUTER ERROR: can't read whole ipv6 packet (too small, size = %u of %u) from %s\n", nread, len, source_desc_c);
     print_packet(buffer, nread);
-  } else if(zs_unlikely(*srca != remote_peer_detail_t() && am_ii_addr(inner_addr_t(h_ip->ip6_src)))) {
+  } else if(zs_unlikely(!srca->is_local() && am_ii_addr(inner_addr_t(h_ip->ip6_src)))) {
     printf("ROUTER WARNING: drop ipv6 packet (looped with local as source)\n");
   } else {
     if(zs_unlikely(nread != len))
@@ -755,7 +755,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   if(!verify_ipv4_packet(source_peer, buffer, buflen, source_desc_c))
     return;
 
-  const bool source_is_local = (*source_peer == remote_peer_t());
+  const bool source_is_local = source_peer->is_local();
 
   const auto h_ip          = reinterpret_cast<struct ip*>(buffer);
   const auto pkid          = ntohs(h_ip->ip_id);
@@ -930,7 +930,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   if(!verify_ipv6_packet(source_peer, buffer, buflen, source_desc_c))
     return;
 
-  const bool source_is_local = (*source_peer == remote_peer_t());
+  const bool source_is_local = source_peer->is_local();
 
   const auto h_ip     = reinterpret_cast<struct ip6_hdr*>(buffer);
   // TODO: there could be other IPv6 headers before ICMPv6
@@ -1467,7 +1467,7 @@ int main(int argc, char *argv[]) {
           if(zs_likely(odat.to_discard || pdat != odat))
             continue;
           // we found a duplicate
-          // delete the one which has a corresponding config entry or a lower use count
+          // delete the one which doesn't have a corresponding config entry or a lower use count
           ((!pdat.cent && odat.cent) || (i.use_count() < op.use_count()) ? i : op)
             ->to_discard = true;
         }

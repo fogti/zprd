@@ -21,7 +21,7 @@ void sender_t::enqueue(send_data &&dat) {
   // sanitize dat.dests
   if(dat.dests.empty())
     return;
-  if(*dat.dests.front() == remote_peer_t())
+  if(dat.dests.front()->is_local())
     dat.dests.clear();
   dat.dests.shrink_to_fit();
 

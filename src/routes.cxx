@@ -72,7 +72,7 @@ void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &
   const auto ct = last_time - 2 * zprd_conf.remote_timeout;
   _routers.remove_if(
     [ct,&f](const via_router_t &a) {
-      if(ct < a.seen) return false;
+      if(ct < a.seen || a.addr->is_local()) return false;
       f(a.addr);
       return true;
     }

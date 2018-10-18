@@ -31,6 +31,7 @@ class remote_peer_t : public std::enable_shared_from_this<remote_peer_t> {
 
   // generic access methods, locked
   auto get_saddr() const noexcept -> sockaddr_storage;
+  bool is_local() const noexcept { return saddr.ss_family == AF_UNSPEC; }
   void set_saddr(const sockaddr_storage &sas, bool do_lock = true) noexcept;
   void set_port(uint16_t port, bool do_lock = true) noexcept;
   void set_port_if_unset(uint16_t port, bool do_lock = true) noexcept;
@@ -60,12 +61,10 @@ struct remote_peer_detail_t : remote_peer_t {
   bool to_discard; // should this entry be deleted in the next cleanup round?
 
   remote_peer_detail_t() noexcept;
-  explicit remote_peer_detail_t(const sockaddr_storage &sas) noexcept;
-  explicit remote_peer_detail_t(const remote_peer_t &o) noexcept;
-  explicit remote_peer_detail_t(remote_peer_t &&o) noexcept;
   remote_peer_detail_t(const remote_peer_detail_t &o) noexcept = delete;
-  remote_peer_detail_t(const remote_peer_t &o, const size_t cfgent) noexcept;
-  remote_peer_detail_t(remote_peer_t &&o, const size_t cfgent) noexcept;
+
+  explicit remote_peer_detail_t(const sockaddr_storage &sas) noexcept;
+  remote_peer_detail_t(const sockaddr_storage &sas, const size_t cfgent) noexcept;
 
   const char *cfgent_name() const noexcept;
 
