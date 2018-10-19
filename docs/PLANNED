@@ -1,17 +1,10 @@
 Overview:
 
-  ZPRN || inner proto (e.g. currently IPv4/IPv6 + ...)
+  ZPRN || inner proto (e.g. IP*)
       ZPRD
-  outer proto (e.g. currently IPv4/IPv6 + UDP)
+  outer proto (e.g. IP* + UDP)
 
 Done things:
-  outer proto:
-   - support for IPv6
-   - Motivation for port numbers in addr struct
-     - better support for NAT'ed networks
-
-  inner proto:
-   - support for IPv6
 
   ZPRN:
    - PROBE before DELETE
@@ -21,7 +14,7 @@ Done things:
 Planned Things:
 
   ZPRN:
-   - ZPRNv2: compress ZPRN packets, (new mgc = 0x01)
+   - compress ZPRN packets, (probably with new mgc = 0x01)
 
   inner proto:
    - possible support for multicasts (currently mostly blocked)
@@ -29,3 +22,8 @@ Planned Things:
      - support for IGMP (Internet Group Management Protocol)
 
    - possible support for IPX
+
+  routing:
+  - multi-route rand():
+    e.g. switch between the first and second router for a destination randomly
+         if both have near latency and equal hops
