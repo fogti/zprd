@@ -736,6 +736,53 @@ static bool verify_ipv6_packet(const remote_peer_detail_ptr_t &srca, const char 
   return false;
 }
 
+static vector<remote_peer_ptr_t> resolve_route(const remote_peer_detail_ptr_t &source_peer, const char * const __restrict__ source_desc_c,
+                const inner_addr_t &iaddr_src, const inner_addr_t &iaddr_dest, const uint8_t ip_ttl, const bool destination_is_local) {
+  // update routes
+  if(routes[iaddr_src].add_router(
+      source_peer,
+      am_ii_addr(iaddr_src, false) ? 0 : (MAXTTL - ip_ttl)
+  )) {
+    const auto srcdesc = iaddr_src.to_string();
+    printf("ROUTER: add route to %s via %s\n", srcdesc.c_str(), source_desc_c);
+  }
+
+  if(destination_is_local)
+    return {make_shared<remote_peer_t>()};
+
+  const auto r = have_route(iaddr_dest);
+  const auto destdesc = iaddr_dest.to_string();
+
+  if(r) {
+    // got_invalid_route: if route [iaddr_dest via source_peer] is deleted twice, only print del...msg once
+    bool got_invalid_route = false;
+
+    if(r->del_router(source_peer))
+      got_invalid_route = true;
+
+    if(!r->empty() && *source_peer == *r->get_router()) {
+      got_invalid_route = true;
+      r->del_primary_router();
+    }
+
+   do_cont:
+    if(got_invalid_route)
+      printf("ROUTER: delete route to %s via %s (invalid)\n", destdesc.c_str(), source_desc_c);
+    if(!r->empty()) return {r->get_router()};
+  }
+
+  printf("ROUTER: no known route to %s\n", destdesc.c_str());
+  vector<remote_peer_ptr_t> ret = get_peers();
+
+  // split horizon
+  rem_peer(ret, source_peer);
+
+  if(ret.empty())
+    printf("ROUTER: drop packet (no destination) from %s\n", source_desc_c);
+
+  return ret;
+}
+
 /** route_packet:
  *
  * decide which socket is the destination,
@@ -811,8 +858,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   const inner_addr_t iaddr_dst(ip_dst.s_addr);
 
   // am I an endpoint
-  const bool destination_is_local = !source_is_local && am_ii_addr(iaddr_dst);
-  const bool iam_ep = source_is_local || destination_is_local;
+  const bool iam_ep = source_is_local || am_ii_addr(iaddr_dst);
 
   // we can use the ttl directly, it is 1 byte long
   if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
@@ -829,32 +875,9 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   // NOTE: make sure that no changes are done to buffer
   h_ip->ip_sum = 0;
 
-  // update routes
-  if(routes[iaddr_src].add_router(
-      source_peer,
-      am_ii_addr(iaddr_src, false) ? 0 : (MAXTTL - h_ip->ip_ttl)
-  ))
-    printf("ROUTER: add route to %s via %s\n", inet_ntoa(ip_src), source_desc_c);
-
-  vector<remote_peer_ptr_t> ret;
-
-  // get route to destination
-  if(destination_is_local) {
-    ret.emplace_back(make_shared<remote_peer_t>());
-  } else if(const auto r = have_route(ip_dst.s_addr)) {
-    ret.emplace_back(r->get_router());
-  } else {
-    printf("ROUTER: no known route to %s\n", inet_ntoa(ip_dst));
-    ret = get_peers();
-  }
-
-  // split horizon
-  rem_peer(ret, source_peer);
-
-  // assert(!iam_ep && !rem_peer(local_ip.s_addr));
+  vector<remote_peer_ptr_t> ret = resolve_route(source_peer, source_desc_c, iaddr_src, iaddr_dst, h_ip->ip_ttl, !source_is_local && iam_ep);
 
   if(ret.empty()) {
-    printf("ROUTER: drop packet %u (no destination) from %s\n", pkid, source_desc_c);
     if(is_icmp_errmsg) return;
 
     if(const auto aptr = get_local_aptr(IAFA_AT_INET)) {
@@ -965,8 +988,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
     return;
 
   // am I an endpoint
-  const bool destination_is_local = !source_is_local && am_ii_addr(iaddr_dst);
-  const bool iam_ep = source_is_local || destination_is_local;
+  const bool iam_ep = source_is_local || am_ii_addr(iaddr_dst);
   auto &hops = h_ip->ip6_hops;
 
   // we can use the ttl directly, it is 1 byte long
@@ -981,33 +1003,9 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   // decrement ttl
   if(!iam_ep) --(hops);
 
-  // update routes
-  if(routes[iaddr_src].add_router(
-      source_peer,
-      am_ii_addr(iaddr_src, false) ? 0 : (MAXTTL - hops)
-  )) {
-    const string srcnam = helper_ip6a2string(ip_src);
-    printf("ROUTER: add route to %s via %s\n", srcnam.c_str(), source_desc_c);
-  }
-
-  const string dstnam = helper_ip6a2string(ip_dst);
-  vector<remote_peer_ptr_t> ret;
-
-  // get route to destination
-  if(destination_is_local) {
-    ret.emplace_back(make_shared<remote_peer_t>());
-  } else if(const auto r = have_route(inner_addr_t(ip_dst))) {
-    ret.emplace_back(r->get_router());
-  } else {
-    printf("ROUTER: no known route to %s\n", dstnam.c_str());
-    ret = get_peers();
-  }
-
-  // split horizon
-  rem_peer(ret, source_peer);
+  vector<remote_peer_ptr_t> ret = resolve_route(source_peer, source_desc_c, iaddr_src, iaddr_dst, hops, !source_is_local && iam_ep);
 
   if(ret.empty()) {
-    printf("ROUTER: drop packet (no destination) from %s\n", source_desc_c);
     if(is_icmp_errmsg) return;
 
     if(const auto aptr = get_local_aptr(IAFA_AT_INET6)) {
@@ -1022,7 +1020,8 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
 
     // to prevent routing loops
     // drop routing table entry, if there is any
-    if(const auto route = have_route(inner_addr_t(ip_dst))) {
+    if(const auto route = have_route(iaddr_dst)) {
+      const auto dstnam = helper_ip6a2string(ip_dst);
       const auto d = get_remote_desc(route->get_router());
       printf("ROUTER: delete route to %s via %s (invalid)\n", dstnam.c_str(), d.c_str());
       route->del_primary_router();
