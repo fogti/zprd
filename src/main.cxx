@@ -217,7 +217,7 @@ static bool init_all(const string &confpath) {
 
     // DEFAULTS
     zprd_conf.data_port      = 45940; // P45940
-    zprd_conf.remote_timeout = 600;   // T600   = 10 min
+    zprd_conf.remote_timeout = 300;   // T300   = 5 min
     zprd_conf.preferred_af   = AF_UNSPEC;
 
     // is used when we are root and see the 'U' setting in the conf to drop privileges

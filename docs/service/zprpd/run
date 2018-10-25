@@ -4,7 +4,7 @@
 # used to refresh the routing table of ZPRD
 #  (route, hop count and latency)
 
-while sleep $(( $RANDOM % 480 + 60 )); do
+while sleep $(( $RANDOM % 240 + 30 )); do
   for i in $(< /etc/zprpd.conf); do
     ping -c1 "$i" &>/dev/null || echo "$i failed"
   done
