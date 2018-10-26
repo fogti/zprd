@@ -671,9 +671,15 @@ static void send_zprn_msg(const zprn_v2 &msg) {
   auto peers = get_peers();
 
   // split horizon
-  if(msg.zprn_cmd == ZPRN_ROUTEMOD && msg.zprn_prio != 0xff)
-    if(const auto r = have_route(msg.route))
-      rem_peer(peers, r->get_router());
+  if(msg.zprn_prio != 0xff)
+    switch(msg.zprn_cmd) {
+      case ZPRN_ROUTEMOD:
+      case ZPRN2_PROBE:
+        if(const auto r = have_route(msg.route))
+          rem_peer(peers, r->get_router());
+        break;
+      default: break;
+    }
 
   sender.enqueue(zprn2_sdat{msg, move(peers)});
 }
