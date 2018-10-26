@@ -17,6 +17,7 @@ CMDs:
      IP_ADDR|PORT)
   T  remote timeout (re-resolve remote)
   U  drop privs to. user
+  n  set the max near RTT for multi-route-rand()
 
 EXAMPLE:
   @ see doc/files/zprd.conf

@@ -47,6 +47,8 @@ class route_via_t final {
   void del_primary_router() noexcept
     { _routers.pop_front(); }
 
+  void swap_near_routers() noexcept;
+
  private:
   auto find_router(const remote_peer_ptr_t &router) noexcept -> decltype(_routers)::iterator;
 };

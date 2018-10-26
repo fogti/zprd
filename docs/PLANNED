@@ -11,6 +11,11 @@ Done things:
      e.g. one node is outdated, first PROBE (when timeout) then DELETE (when timeout * 2)
      why: faster convergence
 
+  routing:
+  - multi-route rand():
+    e.g. switch between the first and second router for a destination randomly
+         if both have near latency and equal hops
+
 Planned Things:
 
   ZPRN:
@@ -22,8 +27,3 @@ Planned Things:
      - support for IGMP (Internet Group Management Protocol)
 
    - possible support for IPX
-
-  routing:
-  - multi-route rand():
-    e.g. switch between the first and second router for a destination randomly
-         if both have near latency and equal hops

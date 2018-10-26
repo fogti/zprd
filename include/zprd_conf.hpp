@@ -20,6 +20,11 @@ struct zprd_conf_t {
   // timeout in seconds after which remotes are silently discarded
   time_t remote_timeout;
 
+  // latency, as in (|a.l - b.l|) <= max_near_rtt,
+  // to consider two routers are near when considering one target
+  // needed for multi-route-rand()
+  uint16_t max_near_rtt;
+
   // preferred AF_* for resolve_...
   sa_family_t preferred_af;
 };

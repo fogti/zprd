@@ -72,7 +72,7 @@ void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &
   const auto ct = last_time - 2 * zprd_conf.remote_timeout;
   _routers.remove_if(
     [ct,&f](const via_router_t &a) {
-      if(ct < a.seen || a.addr->is_local()) return false;
+      if(zs_likely(ct < a.seen || a.addr->is_local())) return false;
       f(a.addr);
       return true;
     }
@@ -85,4 +85,15 @@ void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &
       return std::tie(a.hops, a.latency, b.seen) < std::tie(b.hops, b.latency, a.seen);
     }
   );
+}
+
+#include <stdlib.h>
+#include <math.h>
+
+void route_via_t::swap_near_routers() noexcept {
+  const auto begit = _routers.begin();
+  auto a = begit, b = begit;
+  ++b;
+  if(zs_unlikely(b != _routers.end() && a->hops == b->hops && !(rand() % 2) && fabs(a->latency - b->latency) <= zprd_conf.max_near_rtt))
+    iter_swap(a, b);
 }

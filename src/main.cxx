@@ -218,6 +218,7 @@ static bool init_all(const string &confpath) {
     // DEFAULTS
     zprd_conf.data_port      = 45940; // P45940
     zprd_conf.remote_timeout = 300;   // T300   = 5 min
+    zprd_conf.max_near_rtt   = 5;     // n5     = 5 ms
     zprd_conf.preferred_af   = AF_UNSPEC;
 
     // is used when we are root and see the 'U' setting in the conf to drop privileges
@@ -258,6 +259,10 @@ static bool init_all(const string &confpath) {
 
         case 'U':
           run_as_user = move(arg);
+          break;
+
+        case 'n':
+          zprd_conf.max_near_rtt = stoi(arg);
           break;
 
         case '^':
@@ -658,10 +663,6 @@ static route_via_t* have_route(const uint32_t dsta) noexcept {
   return have_route(inner_addr_t(dsta));
 }
 
-static void sort_peers() {
-  std::sort(remotes.begin(), remotes.end(), x_less);
-}
-
 static auto get_peers() {
   vector<remote_peer_ptr_t> ret(remotes.begin(), remotes.end());
   return ret;
@@ -774,7 +775,11 @@ static vector<remote_peer_ptr_t> resolve_route(const remote_peer_detail_ptr_t &s
    do_cont:
     if(got_invalid_route)
       printf("ROUTER: delete route to %s via %s (invalid)\n", destdesc.c_str(), source_desc_c);
-    if(!r->empty()) return {r->get_router()};
+    if(!r->empty()) {
+      if(zs_likely(zprd_conf.max_near_rtt))
+        r->swap_near_routers();
+      return {r->get_router()};
+    }
   }
 
   printf("ROUTER: no known route to %s\n", destdesc.c_str());
@@ -1523,7 +1528,7 @@ int main(int argc, char *argv[]) {
       ++i;
     }
 
-    sort_peers();
+    std::sort(remotes.begin(), remotes.end(), x_less);
     pastt_clu = last_time;
 
     // flush output

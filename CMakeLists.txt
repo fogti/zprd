@@ -28,6 +28,12 @@ check_c_source_compiles(
   "static int __attribute__((pure)) zs_st_pure_func(const int x) { return 2 * x; }\nint main(void) { return zs_st_pure_func(0); }"
   HAVE_ATTRIB_PURE)
 
+include(CheckFunctionExists)
+check_function_exists(fabs HAVE_IMPLICIT_LIBM)
+if(NOT HAVE_IMPLICIT_LIBM)
+  find_library(LIBRARY_MATH NAMES m)
+endif()
+
 configure_file(include/config.h.in "${PROJECT_BINARY_DIR}/config.h")
 include_directories(libzsneta src include "${PROJECT_BINARY_DIR}")
 set(Z_COMMON_C_FLAGS "-fno-plt -ftree-vectorize")
@@ -63,6 +69,9 @@ add_executable(zprd src/main.cxx src/cksum.c src/crw.c
 target_link_libraries(zprd Threads::Threads zsneta)
 if(USE_DEBUG)
   target_link_libraries(zprd debugh)
+endif()
+if(NOT HAVE_IMPLICIT_LIBM)
+  target_link_libraries(zprd "${LIBRARY_MATH}")
 endif()
 
 function(src_compile_flags flag)
