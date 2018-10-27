@@ -12,7 +12,7 @@
 
 struct zprd_conf_t {
   std::string iface;
-  std::vector<std::string> remotes;
+  std::vector<std::string> remotes, route_hooks;
 
   // data port
   uint16_t data_port;

@@ -9,7 +9,8 @@ LINE FORMAT:
 CMDs:
   #  comment
   A  ip address (they are passed unescaped to iproute2 via system(3))
-  H  add hook script
+  H  add hook script (runs after tundev is up, before uid change, e.g. as root)
+  h  add routing hook script (runs while routing cleanup, with dropped privs, called for each fresh or empty route and peer)
   I  interface
   L  export local (format := IP_ADDR)
   R  remote (they support the formats

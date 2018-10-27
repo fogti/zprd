@@ -151,6 +151,38 @@ static bool setup_server_fd(const sa_family_t sa_family) {
   return false;
 }
 
+static void run_route_hooks_intern(const string &args) {
+  string tmp;
+  for(const auto &i : zprd_conf.route_hooks) {
+    tmp = i;
+    tmp += args;
+    if(const int ret = system(tmp.c_str()))
+      printf("ROUTER HOOK ERROR: %s; $? = %d\n", i.c_str(), ret);
+  }
+}
+
+static void run_route_hooks(bool is_deleted, const inner_addr_t &dest) {
+  if(zprd_conf.route_hooks.empty()) return;
+  string a2c = " route ";
+  a2c.reserve(28);
+  a2c += is_deleted ? "del" : "add";
+  a2c += " \"";
+  a2c += dest.to_string();
+  a2c += '"';
+  run_route_hooks_intern(a2c);
+}
+
+static void run_route_hooks(bool is_deleted, const remote_peer_ptr_t &destptr) {
+  if(zprd_conf.route_hooks.empty()) return;
+  string a2c = " peer ";
+  a2c.reserve(27);
+  a2c += is_deleted ? "del" : "add";
+  a2c += " \"";
+  a2c += AFa_sa2string(destptr->saddr);
+  a2c += '"';
+  run_route_hooks_intern(a2c);
+}
+
 static void connect2server(const string &r, const size_t cent) {
   // don't use a reference into ptr here, it causes memory corruption
   struct sockaddr_storage remote;
@@ -162,6 +194,7 @@ static void connect2server(const string &r, const size_t cent) {
   {
     const string remote_desc = AFa_sa2string(ptr->saddr);
     printf("CLIENT: connected to server %s\n", remote_desc.c_str());
+    run_route_hooks(false, ptr);
   }
   remotes.emplace_back(move(ptr));
 }
@@ -235,6 +268,10 @@ static bool init_all(const string &confpath) {
 
         case 'H':
           hooks.emplace_back(move(arg));
+          break;
+
+        case 'h':
+          zprd_conf.route_hooks.emplace_back(move(arg));
           break;
 
         case 'I':
@@ -446,21 +483,17 @@ static bool x_less(const remote_peer_ptr_t &a, const remote_peer_ptr_t &b) {
   return (*a) < (*b);
 }
 
-/* find_or_emplace_peer
- * @return
- *   true  found
- *   false emplace'd
+/* find_or_emplace_peer, called from main()
  */
-static bool find_or_emplace_peer(vector<remote_peer_detail_ptr_t> &vec, remote_peer_detail_ptr_t &item) {
+static void find_or_emplace_peer(vector<remote_peer_detail_ptr_t> &vec, remote_peer_detail_ptr_t &item) {
   // perform a binary find
   const auto it = lower_bound(vec.cbegin(), vec.cend(), item, x_less);
   if(it == vec.cend() || **it != *item) {
     vec.emplace(it, item);
-    return false;
-  }
-  if(*it != item)
+    run_route_hooks(false, item);
+  } else {
     item = *it;
-  return true;
+  }
 }
 
 static bool rem_peer(vector<remote_peer_ptr_t> &vec, const remote_peer_ptr_t &item) {
@@ -1508,6 +1541,7 @@ int main(int argc, char *argv[]) {
         msg.zprn_cmd = ZPRN_ROUTEMOD;
         msg.zprn_prio = (iee ? 0xff : ise._routers.front().hops);
         send_zprn_msg(msg);
+        run_route_hooks(iee, route.first);
       } else if(!iee && ise._routers.front().seen < route_probe_tin) {
         msg.zprn_cmd = ZPRN2_PROBE;
         msg.zprn_prio = 0xff;
@@ -1518,8 +1552,11 @@ int main(int argc, char *argv[]) {
     });
 
     // discard remotes (after cleanup -> cleanup has a chance to notify them)
-    map_remove_if(remotes, [](const auto &peer) -> bool
-      { return peer->to_discard; });
+    map_remove_if(remotes, [](const auto &peer) -> bool {
+      if(peer->to_discard)
+        run_route_hooks(true, peer);
+      return peer->to_discard;
+    });
 
     size_t i = 0;
     for(const auto fri : found_remotes) {
