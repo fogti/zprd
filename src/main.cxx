@@ -1159,7 +1159,7 @@ static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * co
       msg.zprn_prio = 0;
     else if(const auto r = have_route(dsta)) { // we have a route
       msg.zprn_prio = r->_routers.front().hops;
-      if(msg.zprn_prio == 0xff)
+      if(msg.zprn_prio == 0xff || *r->get_router() == *srca)
         return;
     } else
       return;
