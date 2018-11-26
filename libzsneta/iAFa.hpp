@@ -32,7 +32,7 @@ static inline constexpr size_t zs_attrib_pure pli_at2alen(const iafa_at_t type) 
 // POD for inner addresses
 struct inner_addr_t {
   // type consists of two parts:
-  //  first 2 bytes = type: ETH_P_* -alike spec , but (type & IAFA_AL_MAX) == get_alen()
+  //  first 2 bytes = type: ETH_P_* -alike spec, but (type & IAFA_AL_MAX) == get_alen()
   iafa_at_t type;
 
   // NOTE: addr is ALWAYS in network-byte-order, when inside this struct
@@ -55,6 +55,9 @@ struct inner_addr_t {
   size_t get_tflen() const noexcept;
 
   auto to_string() const -> std::string;
+
+  // e.g. ipv4 addr == 255.255.255.255
+  bool is_direct_broadcast() const noexcept;
 };
 
 // similar POD like inner_addr_t, but for local endpoint addrs + netmask

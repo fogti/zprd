@@ -21,7 +21,7 @@ auto route_via_t::find_router(const remote_peer_ptr_t &router) noexcept -> declt
   );
 }
 
-static void update_hopcnt(uint8_t &oldhops, const uint8_t newhops) {
+static void update_hopcnt(uint8_t &oldhops, const uint8_t newhops) noexcept {
   if(newhops > oldhops)
     switch(newhops - oldhops) {
       case 0xbe:
@@ -90,10 +90,34 @@ void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &
 #include <stdlib.h>
 #include <math.h>
 
+/* swap_near_routers
+   [FI] <- [SE] <- [TH]...
+   --> [SE] <- [TH]... <- [FI] ...
+ */
 void route_via_t::swap_near_routers() noexcept {
-  const auto begit = _routers.begin();
-  auto a = begit, b = begit;
-  ++b;
-  if(zs_unlikely(b != _routers.end() && a->hops == b->hops && !(rand() % 2) && fabs(a->latency - b->latency) <= zprd_conf.max_near_rtt))
-    iter_swap(a, b);
+  if(zs_likely(_routers.size() < 2 && (rand() % 2))) return;
+
+  const auto endit = _routers.cend();
+  auto &primary = _routers.front();
+  auto previt = _routers.cbegin(), it = previt;
+  size_t near_rcnt = 0;
+  for(++it; it != endit; ++it) {
+    if(!zs_unlikely(abs(static_cast<int>(it->hops) - primary.hops) < 2 && fabs(it->latency - primary.latency) <= zprd_conf.max_near_rtt))
+      break;
+    ++previt;
+    ++near_rcnt;
+  }
+  if(zs_likely(!near_rcnt)) return;
+
+  /*
+    1. backup HEAD + remove it from _routers
+    2. recalculate previt
+    3. put backup'ed HEAD after previt
+   */
+
+  auto primary_backup = move(primary);
+  _routers.pop_front();
+  previt = _routers.cbegin();
+  std::advance(previt, near_rcnt - 1);
+  _routers.emplace_after(previt, move(primary_backup));
 }

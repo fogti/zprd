@@ -69,6 +69,13 @@ auto inner_addr_t::to_string() const -> string {
   return AFa_addr2string(iafa_at2sa_family(type), addr);
 }
 
+bool inner_addr_t::is_direct_broadcast() const noexcept {
+  switch(type) {
+    case IAFA_AT_INET: return *reinterpret_cast<const uint32_t*>(addr) == INADDR_BROADCAST;
+    default:           return false;
+  }
+}
+
 [[gnu::hot]]
 static int compare_addr(const inner_addr_t &lhs, const inner_addr_t &rhs) noexcept {
   return (lhs.type == rhs.type)

@@ -63,6 +63,7 @@ void sender_t::stop() noexcept {
   _cond.notify_all();
 }
 
+#include <unordered_set>
 #include <unordered_map>
 
 /** file descriptors
@@ -77,20 +78,26 @@ void sender_t::worker_fn() noexcept {
   // create a backup
   const auto my_server_fds = server_fds;
 
-  const auto sendto_peer = [&my_server_fds](const remote_peer_ptr_t &i, const vector<char> &buf) noexcept -> bool {
+  unordered_set<remote_peer_ptr_t> zprn_confirmed;
+  bool got_error = false, df = false;
+  uint32_t tos = 0;
+
+  const auto sendto_peer = [&](const remote_peer_ptr_t &i, const vector<char> &buf) noexcept {
+    const auto confirmed_it = zprn_confirmed.find(i);
+    const bool is_confirmed = (confirmed_it != zprn_confirmed.end());
+    if(is_confirmed) zprn_confirmed.erase(confirmed_it);
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
-      if(sendto(my_server_fds.at(o.saddr.ss_family), buf.data(), buf.size(), 0, reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0) {
+      if(zs_unlikely(sendto(
+          my_server_fds.at(o.saddr.ss_family), buf.data(), buf.size(), is_confirmed ? MSG_CONFIRM : 0,
+          reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0))
+      {
         perror("sendto()");
-        return false;
+        got_error = true;
       }
-      return true;
     });
   };
 
   prctl(PR_SET_NAME, "sender", 0, 0, 0);
-
-  bool got_error = false, df = false;
-  uint32_t tos = 0;
 
   const int fd_inet = my_server_fds.at(AF_INET);
 #ifdef USE_IPV6
@@ -154,9 +161,7 @@ void sender_t::worker_fn() noexcept {
       _cond.wait(lock, [this] { return _stop || !(_tasks.empty() && _zprn_msgs.empty()); });
       if(_tasks.empty() && _zprn_msgs.empty()) return;
       tasks = move(_tasks);
-      _tasks = {};
       zprn_msgs = move(_zprn_msgs);
-      _zprn_msgs = {};
     }
 
     got_error = false;
@@ -173,7 +178,7 @@ void sender_t::worker_fn() noexcept {
           if(buflen >= sizeof(struct ip) && h_ip->ip_v == 4)
             h_ip->ip_sum = IN_CKSUM(h_ip);
         }
-        if(write(local_fd, buf, buflen) < 0) {
+        if(zs_unlikely(write(local_fd, buf, buflen) < 0)) {
           got_error = true;
           perror("write()");
         }
@@ -189,8 +194,7 @@ void sender_t::worker_fn() noexcept {
       }
 
       for(const auto &i : dat.dests)
-        if(!sendto_peer(i, dat.buffer))
-          got_error = true;
+        sendto_peer(i, dat.buffer);
     }
 
     if(zprn_msgs.empty()) goto flush_stdstreams;
@@ -205,6 +209,7 @@ void sender_t::worker_fn() noexcept {
       // skip concat part
       vector<char> xbuf = zprn_hdrv;
       auto &i = zprn_msgs.front();
+      if(i.confirmed) zprn_confirmed.insert(i.confirmed);
       {
         const size_t zmsiz = i.zprn.get_needed_size();
         const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
@@ -215,8 +220,7 @@ void sender_t::worker_fn() noexcept {
         xbuf.insert(xbuf.end(), zmbeg, zmend);
       }
       for(const auto &dest : i.dests)
-        if(!sendto_peer(dest, xbuf))
-          got_error = true;
+        sendto_peer(dest, xbuf);
 
       zprn_msgs.clear();
       goto flush_stdstreams;
@@ -233,9 +237,10 @@ void sender_t::worker_fn() noexcept {
         x = htons(x);
       }
       const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
+      if(i.confirmed) zprn_confirmed.insert(i.confirmed);
       for(const auto &dest : i.dests) {
         auto &buffer = zprn_buf[dest];
-        if(buffer.empty() || (buffer.back().size() + zmsiz) > 1232) {
+        if(buffer.empty() || zs_unlikely((buffer.back().size() + zmsiz) > 1232)) {
           // create new buffer slot
           buffer.emplace_back(zprn_hdrv);
         }
@@ -250,8 +255,7 @@ void sender_t::worker_fn() noexcept {
     // send ZPRN v2 messages
     for(const auto &bufpd : zprn_buf)
       for(const auto &pkt : bufpd.second)
-        if(!sendto_peer(bufpd.first, pkt))
-          got_error = true;
+        sendto_peer(bufpd.first, pkt);
 
     zprn_buf.clear();
 

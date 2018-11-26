@@ -18,8 +18,16 @@ Done things:
 
 Planned Things:
 
+  general:
+   - add TOFU authentification and encryption
+     (reduce overhead by integration of openvpn/wireguard into ZPRD)
+   - compress all packets
+
   ZPRN:
    - compress ZPRN packets, (probably with new mgc = 0x01)
+
+  outer proto:
+   - examine ICMP errors on sockets, discard peers if they are unreachable
 
   inner proto:
    - possible support for multicasts (currently mostly blocked)

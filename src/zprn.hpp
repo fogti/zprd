@@ -29,7 +29,6 @@ struct zprn_v2hdr final {
 };
 
 struct zprn_v2 final {
-
   uint8_t zprn_cmd;  // command
   uint8_t zprn_prio; // priority
   inner_addr_t route;

@@ -45,6 +45,7 @@ struct send_data final {
 struct zprn2_sdat {
   zprn_v2 zprn;
   std::vector<remote_peer_ptr_t> dests;
+  remote_peer_ptr_t confirmed;
 
   zprn2_sdat(const zprn2_sdat &o) = default;
   zprn2_sdat(zprn2_sdat &&o) noexcept
@@ -53,12 +54,16 @@ struct zprn2_sdat {
   zprn2_sdat(const zprn_v2 &zprn_, decltype(dests) &&d) noexcept
     : zprn(zprn_), dests(std::move(d)) { }
 
+  zprn2_sdat(const zprn_v2 &zprn_, decltype(dests) &&d, decltype(confirmed) cfm) noexcept
+    : zprn(zprn_), dests(std::move(d)), confirmed(std::move(cfm)) { }
+
   zprn2_sdat& operator=(const zprn2_sdat &o) = default;
 
   zprn2_sdat& operator=(zprn2_sdat &&o) noexcept {
     if(this != &o) {
       zprn  = o.zprn;
       dests = std::move(o.dests);
+      confirmed = std::move(o.confirmed);
     }
     return *this;
   }

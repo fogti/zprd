@@ -66,7 +66,7 @@ install(FILES libzsneta/AFa.hpp libzsneta/iAFa.hpp libzsneta/oAFa.hpp DESTINATIO
 add_executable(zprd src/main.cxx src/cksum.c src/crw.c
                     src/ping_cache.cxx src/remote_peer.cxx src/remote_peer_detail.cxx
                     src/resolve.cxx src/routes.cxx src/sender.cxx src/zprn.cxx)
-target_link_libraries(zprd Threads::Threads zsneta)
+target_link_libraries(zprd Threads::Threads zsneta m)
 if(USE_DEBUG)
   target_link_libraries(zprd debugh)
 endif()
@@ -77,8 +77,5 @@ endif()
 function(src_compile_flags flag)
   set_property(SOURCE ${ARGN} APPEND_STRING PROPERTY COMPILE_FLAGS " ${flag}")
 endfunction()
-
-# disable exceptions for files, which only contain 'noexcept' functions
-src_compile_flags("-fexceptions -funwind-tables" src/main.cxx src/routes.cxx)
 
 install(TARGETS zprd DESTINATION "${INSTALL_BIN_DIR}")

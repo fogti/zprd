@@ -1,9 +1,11 @@
-Zscheile Peer Routing Notification (only used inside of ZPRD) v1
+Zscheile Peer Routing Notification (only used inside of ZPRD) v2
 
 Packet Header:
- 1       1         1         1
-[MAGIC] [Version] [Command] [Priority] [Data]
- 00      01
+ [1b MGC] [1b VER] [2b UNUNSED]
+  0x00     0x02    0x0000
+
+Packet Body:
+ [1b CMD] [1b PRIO] [2b IAFA_AT] [IAFA data...]
 
 ## COMMANDS
 
@@ -16,14 +18,8 @@ XX  NAME
     FF unreachable       (delete route)
     *                    (add route)
 
-    ---
-    Route Update Packet Format: (CMD eq to 00)
-          00 01 00 00 [IPv4 Route Dest]
-    bytes 4            32
-
     Route update packets are send to every peer
     except the default router.
-    ---
 
 01  Connection Management
     00 open connection
@@ -33,3 +29,8 @@ XX  NAME
     00 OK
     *  ERROR
     FF WORST ERROR
+
+03  Route Probe
+    FE end of line  (possible route would loop)
+    FF request      (request information about this)
+    *               (refresh route)
