@@ -897,6 +897,10 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   const inner_addr_t iaddr_src(ip_src.s_addr);
   const inner_addr_t iaddr_dst(ip_dst.s_addr);
 
+  // [TODO?] discard multicast packets
+  if((ip_dst.s_addr >> 28) == 14)
+    return;
+
   // am I an endpoint
   const bool iam_ep = source_is_local || am_ii_addr(iaddr_dst);
 

@@ -95,14 +95,14 @@ void route_via_t::cleanup(const std::function<void (const remote_peer_ptr_t&)> &
    --> [SE] <- [TH]... <- [FI] ...
  */
 void route_via_t::swap_near_routers() noexcept {
-  if(zs_likely(_routers.size() < 2 && (rand() % 2))) return;
+  if(_routers.empty() || rand() % 2) return;
 
   const auto endit = _routers.cend();
   auto &primary = _routers.front();
   auto previt = _routers.cbegin(), it = previt;
   size_t near_rcnt = 0;
   for(++it; it != endit; ++it) {
-    if(!zs_unlikely(abs(static_cast<int>(it->hops) - primary.hops) < 2 && fabs(it->latency - primary.latency) <= zprd_conf.max_near_rtt))
+    if(!zs_unlikely(it->hops <= primary.hops && fabs(it->latency - primary.latency) <= zprd_conf.max_near_rtt))
       break;
     ++previt;
     ++near_rcnt;
