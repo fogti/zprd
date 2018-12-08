@@ -702,7 +702,6 @@ static void send_zprn_msg(const zprn_v2 &msg, const remote_peer_ptr_t &confirmed
   if(msg.zprn_prio != 0xff)
     switch(msg.zprn_cmd) {
       case ZPRN_ROUTEMOD:
-      case ZPRN2_PROBE:
         if(const auto r = have_route(msg.route))
           rem_peer(peers, r->get_router());
         break;
@@ -710,6 +709,30 @@ static void send_zprn_msg(const zprn_v2 &msg, const remote_peer_ptr_t &confirmed
     }
 
   sender.enqueue(zprn2_sdat{msg, move(peers), confirmed});
+}
+
+static void send_zprn_probe_req(const inner_addr_t &dest) {
+  zprn_v2 msg;
+  msg.zprn_cmd = ZPRN2_PROBE;
+  msg.route    = dest;
+
+  vector<remote_peer_ptr_t> non_routers(remotes.cbegin(), remotes.cend());
+  // split horizon
+  if(const auto r = have_route(msg.route)) {
+    const auto &rts = r->_routers;
+    vector<remote_peer_ptr_t> routers;
+    for(auto &i : rts) {
+      routers.emplace_back(i.addr);
+      rem_peer(non_routers, i.addr);
+    }
+    msg.zprn_prio = 0xfe;
+    sender.enqueue(zprn2_sdat{msg, move(routers), {}});
+  }
+
+  if(!non_routers.empty()) {
+    msg.zprn_prio = 0xff;
+    sender.enqueue(zprn2_sdat{msg, move(non_routers), {}});
+  }
 }
 
 [[gnu::cold]]
@@ -1168,46 +1191,51 @@ static void zprn_v2_connmgmt_handler(const remote_peer_ptr_t &srca, const char *
   }
 }
 
+static void zprn_handle_probe_req(const remote_peer_ptr_t &srca, const zprn_v2 &d, const bool expected_to_hr) {
+  bool dwhr = false;
+  zprn_v2 msg = d;
+  if(am_ii_addr(d.route, false)) { // a route to us is probed (and we know we are here)
+    dwhr = true;
+    msg.zprn_prio = 0;
+  } else if(const auto r = have_route(d.route)) { // we have a route
+    dwhr = true;
+    msg.zprn_prio = r->_routers.front().hops;
+    if(msg.zprn_prio == 0xff || *r->get_router() == *srca)
+      dwhr = false;
+  }
+
+  if(dwhr) { // we have an route
+    msg.zprn_cmd = ZPRN_ROUTEMOD;
+  } else if(!expected_to_hr) { // no route and not expected to have one --> nothing to do
+    return;
+  } else   { // oh no, invalidated route
+    msg.zprn_prio = 0x00;
+  }
+  sender.enqueue(zprn2_sdat{msg, {srca}, srca});
+}
+
 /* ZPRNv2 PROBE REQUEST
  * The PROBE request is similar to the ROUTEMOD:DELETE request,
  * with the difference, that the RMD handler deletes the route
  * and the PRB handler keeps it
  */
 static void zprn_v2_probe_handler(const remote_peer_ptr_t &srca, const char * const source_desc_c, const zprn_v2 &d) noexcept {
-  const auto &dsta = d.route;
-  const string dstdesc = dsta.to_string();
-  const char * const ddcs = dstdesc.c_str();
-
-  zprn_v2 msg = d;
-
   switch(d.zprn_prio) {
-    case 0xfe: // got probe response: end-of-line or dead-end or loop
-      // almost equivalent to a ROUTEMOD:DELETE request, with the difference,
-      // that the RMD handler sends an ROUTEMOD:ADD response if it has a route
-      // here, we don't
-      if(const auto r = have_route(dsta))
-        if(r->del_router(srca))
+    case 0x00: // got probe response: end-of-line or dead-end or loop
+      /* almost equivalent to a ROUTEMOD:DELETE request, with the difference,
+         that the RMD handler sends an ROUTEMOD:ADD response if it has a route
+         here, we don't */
+      if(const auto r = have_route(d.route))
+        if(r->del_router(srca)) {
+          const string dstdesc = d.route.to_string();
+          const char * const ddcs = dstdesc.c_str();
           printf("ROUTER: delete route to %s via %s (notified)\n", ddcs, source_desc_c);
+        }
       break;
 
-    case 0xff: // got probe request
-      msg.zprn_prio = 0xfe;
-      if(am_ii_addr(dsta, false)) // a route to us is probed (and we know we are here)
-        msg.zprn_prio = 0;
-      else if(const auto r = have_route(dsta)) { // we have a route
-        msg.zprn_prio = r->_routers.front().hops;
-        if(msg.zprn_prio == 0xff || *r->get_router() == *srca)
-          msg.zprn_prio = 0xfe;
-      }
-      // notify the originator that we are not an router for this dest (based upon split horizon)
-      // but randomly discard that to smooth the network traffic
-      if(msg.zprn_prio == 0xfe && rand() % 2) return;
-      sender.enqueue(zprn2_sdat{msg, {srca}, srca});
-      break;
-
-    default: // got probe response
-      if(!am_ii_addr(dsta) && routes[dsta].add_router(srca, d.zprn_prio + 1))
-        printf("ROUTER: refresh route to %s via %s (notified)\n", ddcs, source_desc_c);
+    // probe requests
+    case 0xff: zprn_handle_probe_req(srca, d, false); break;
+    case 0xfe: zprn_handle_probe_req(srca, d, true ); break;
   }
 }
 
@@ -1559,12 +1587,12 @@ int main(int argc, char *argv[]) {
         ise._fresh_add = false;
         msg.zprn_cmd = ZPRN_ROUTEMOD;
         msg.zprn_prio = (iee ? 0xff : ise._routers.front().hops);
-        send_zprn_msg(msg);
+        send_zprn_msg(msg, iee ? remote_peer_ptr_t() : ise.get_router());
         run_route_hooks(iee, route.first);
       } else if(!iee && ise._routers.front().seen < route_probe_tin) {
         msg.zprn_cmd = ZPRN2_PROBE;
         msg.zprn_prio = 0xff;
-        send_zprn_msg(msg);
+        send_zprn_probe_req(msg.route);
       }
 
       return iee;

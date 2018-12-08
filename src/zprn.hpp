@@ -10,13 +10,10 @@
 // command
 #define ZPRN_ROUTEMOD 0x00
 #define ZPRN_CONNMGMT 0x01
-#define ZPRN_RESULT   0x02
-#define ZPRN2_PROBE 0x03
+#define ZPRN2_PROBE   0x02
 // priority / negation / hop count
 #define ZPRN_CONNMGMT_OPEN   0x00
 #define ZPRN_CONNMGMT_CLOSE  0xFF
-#define ZPRN_RESULT_OK       0x00
-#define ZPRN_RESULT_FATERR   0xFF
 
 #pragma pack(push, 1)
 struct zprn_v2hdr final {
