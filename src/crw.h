@@ -7,7 +7,7 @@
 #include <linux/if_tun.h>
 #include <netinet/in.h>
 #include <stddef.h>
-#include <cwa_noexcept.h>
+#include <zs/ll/cxa_noexcept.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
