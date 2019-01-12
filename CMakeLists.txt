@@ -66,7 +66,7 @@ install(FILES libzsneta/AFa.hpp libzsneta/iAFa.hpp libzsneta/oAFa.hpp DESTINATIO
 add_executable(zprd src/main.cxx src/cksum.c src/crw.c
                     src/ping_cache.cxx src/remote_peer.cxx src/remote_peer_detail.cxx
                     src/resolve.cxx src/routes.cxx src/sender.cxx src/zprn.cxx)
-target_link_libraries(zprd Threads::Threads zsneta m)
+target_link_libraries(zprd Threads::Threads zsneta)
 if(USE_DEBUG)
   target_link_libraries(zprd debugh)
 endif()
