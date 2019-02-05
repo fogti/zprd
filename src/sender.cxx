@@ -87,8 +87,13 @@ void sender_t::worker_fn() noexcept {
     const bool is_confirmed = (confirmed_it != zprn_confirmed.end());
     if(is_confirmed) zprn_confirmed.erase(confirmed_it);
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
+      const auto fdit = my_server_fds.find(o.saddr.ss_family);
+      if(fdit == my_server_fds.end()) {
+        fprintf(stderr, "SENDER INTERNAL ERROR: destination peer with unknown address family %u\n", static_cast<unsigned>(o.saddr.ss_family));
+        return;
+      }
       if(zs_unlikely(sendto(
-          my_server_fds.at(o.saddr.ss_family), buf.data(), buf.size(), is_confirmed ? MSG_CONFIRM : 0,
+          fdit->second, buf.data(), buf.size(), is_confirmed ? MSG_CONFIRM : 0,
           reinterpret_cast<const struct sockaddr *>(&o.saddr), sizeof(o.saddr)) < 0))
       {
         perror("sendto()");
