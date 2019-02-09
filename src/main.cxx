@@ -865,8 +865,6 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
   if(!verify_ipv4_packet(source_peer, buffer, buflen, source_desc_c))
     return;
 
-  const bool source_is_local = source_peer->is_local();
-
   const auto h_ip    = reinterpret_cast<struct ip*>(buffer);
   const auto pkid    = ntohs(h_ip->ip_id);
   const bool is_icmp = (h_ip->ip_p == IPPROTO_ICMP);
@@ -925,24 +923,26 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
     return;
 
   // am I an endpoint
+  const bool source_is_local = source_peer->is_local();
   const bool iam_ep = source_is_local || am_ii_addr(iaddr_dst);
+  auto &ttl = h_ip->ip_ttl;
 
   // we can use the ttl directly, it is 1 byte long
-  if((!h_ip->ip_ttl) || (!iam_ep && h_ip->ip_ttl == 1)) {
+  if((!ttl) || (!iam_ep && ttl == 1)) {
     // ttl is too low -> DROP
-    printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, h_ip->ip_ttl, source_desc_c);
+    printf("ROUTER: drop packet %u (too low ttl = %u) from %s\n", pkid, ttl, source_desc_c);
     if(!is_icmp_errmsg)
       send_icmp_msg(ZICMPM_TTL, h_ip, source_peer);
     return;
   }
 
   // decrement ttl
-  if(!iam_ep) --(h_ip->ip_ttl);
+  if(!iam_ep) --ttl;
 
   // NOTE: make sure that no changes are done to buffer
   h_ip->ip_sum = 0;
 
-  vector<remote_peer_ptr_t> ret = resolve_route(source_peer, source_desc_c, iaddr_src, iaddr_dst, h_ip->ip_ttl, !source_is_local && iam_ep);
+  vector<remote_peer_ptr_t> ret = resolve_route(source_peer, source_desc_c, iaddr_src, iaddr_dst, ttl, !source_is_local && iam_ep);
 
   if(ret.empty()) {
     if(is_icmp_errmsg) return;
@@ -996,7 +996,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 
         case ICMP_ECHOREPLY:
           {
-            const auto m = ping_cache.match(edat, source_peer, h_ip->ip_ttl);
+            const auto m = ping_cache.match(edat, source_peer, ttl);
             if(m.match)
               if(const auto r = have_route(edat.src))
                 r->update_router(m.router, m.hops, m.diff);
@@ -1015,8 +1015,6 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, uint16_t buflen, const char *const __restrict__ source_desc_c) {
   if(!verify_ipv6_packet(source_peer, buffer, buflen, source_desc_c))
     return;
-
-  const bool source_is_local = source_peer->is_local();
 
   const auto h_ip     = reinterpret_cast<struct ip6_hdr*>(buffer);
   // TODO: there could be other IPv6 headers before ICMPv6
@@ -1051,6 +1049,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
     return;
 
   // am I an endpoint
+  const bool source_is_local = source_peer->is_local();
   const bool iam_ep = source_is_local || am_ii_addr(iaddr_dst);
   auto &hops = h_ip->ip6_hops;
 
@@ -1064,7 +1063,7 @@ static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *con
   }
 
   // decrement ttl
-  if(!iam_ep) --(hops);
+  if(!iam_ep) --hops;
 
   vector<remote_peer_ptr_t> ret = resolve_route(source_peer, source_desc_c, iaddr_src, iaddr_dst, hops, !source_is_local && iam_ep);
 
