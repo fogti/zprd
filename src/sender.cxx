@@ -87,9 +87,14 @@ void sender_t::worker_fn() noexcept {
     const bool is_confirmed = (confirmed_it != zprn_confirmed.end());
     if(is_confirmed) zprn_confirmed.erase(confirmed_it);
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
+      if(o.is_local()) {
+        fprintf(stderr, "SENDER INTERNAL ERROR: destination peer is local, size = %zu\n", buf.size());
+        return;
+      }
       const auto fdit = my_server_fds.find(o.saddr.ss_family);
       if(fdit == my_server_fds.end()) {
-        fprintf(stderr, "SENDER INTERNAL ERROR: destination peer with unknown address family %u\n", static_cast<unsigned>(o.saddr.ss_family));
+        fprintf(stderr, "SENDER INTERNAL ERROR: destination peer with unknown address family %u, size = %zu\n",
+          static_cast<unsigned>(o.saddr.ss_family), buf.size());
         return;
       }
       if(zs_unlikely(sendto(
