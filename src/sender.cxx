@@ -88,7 +88,7 @@ void sender_t::worker_fn() noexcept {
     if(is_confirmed) zprn_confirmed.erase(confirmed_it);
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
       if(o.is_local()) {
-        fprintf(stderr, "SENDER INTERNAL ERROR: destination peer is local, size = %zu\n", buf.size());
+        fprintf(stderr, "SENDER INTERNAL ERROR: destination peer is local, use count = %ld, size = %zu\n", i.use_count(), buf.size());
         return;
       }
       const auto fdit = my_server_fds.find(o.saddr.ss_family);
