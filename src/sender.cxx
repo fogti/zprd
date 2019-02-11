@@ -14,6 +14,7 @@
 #include <unistd.h>      // write
 #include <sys/prctl.h>   // prctl
 #include <netinet/ip.h>  // struct ip, IP_*
+#include <algorithm>     // remove_if
 
 using namespace std;
 
@@ -37,6 +38,12 @@ void sender_t::enqueue(zprn2_sdat &&dat) {
   // sanitize dat.dests
   if(dat.dests.empty())
     return;
+  {
+    const auto ie = dat.dests.end();
+    dat.dests.erase(remove_if(dat.dests.begin(), ie,
+      [](const auto &x) noexcept { return !x || x->is_local(); }),
+      ie);
+  }
   dat.dests.shrink_to_fit();
 
   // move into queue
