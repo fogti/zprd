@@ -861,10 +861,7 @@ static vector<remote_peer_ptr_t> resolve_route(const remote_peer_detail_ptr_t &s
  * @ret             none
  **/
 [[gnu::hot]]
-static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, uint16_t buflen, const char *const __restrict__ source_desc_c) {
-  if(!verify_ipv4_packet(source_peer, buffer, buflen, source_desc_c))
-    return;
-
+static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
   const auto h_ip    = reinterpret_cast<struct ip*>(buffer);
   const auto pkid    = ntohs(h_ip->ip_id);
   const bool is_icmp = (h_ip->ip_p == IPPROTO_ICMP);
@@ -1012,10 +1009,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
 }
 
 [[gnu::hot]]
-static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, uint16_t buflen, const char *const __restrict__ source_desc_c) {
-  if(!verify_ipv6_packet(source_peer, buffer, buflen, source_desc_c))
-    return;
-
+static void route6_packet(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, const uint16_t buflen, const char *const __restrict__ source_desc_c) {
   const auto h_ip     = reinterpret_cast<struct ip6_hdr*>(buffer);
   // TODO: there could be other IPv6 headers before ICMPv6
   const bool is_icmp  = (h_ip->ip6_nxt == 0x3a);
@@ -1288,38 +1282,41 @@ static bool handle_zprn_pkt(const remote_peer_detail_ptr_t &srca, char buffer[],
 
 // function to route a generic packet
 [[gnu::hot]]
-static void route_genip_packet(const remote_peer_detail_ptr_t &srca, char buffer[], const uint16_t len) {
+static void route_genip_packet(const remote_peer_detail_ptr_t &srca, char buffer[], uint16_t len) {
+  struct pafdat_t {
+    size_t hdr_len;
+    bool (*verify)(const remote_peer_detail_ptr_t &source_peer, const char buffer[], uint16_t &buflen, const char *source_desc_c);
+    void (*route)(const remote_peer_detail_ptr_t &source_peer, char *const __restrict__ buffer, uint16_t buflen, const char *const __restrict__ source_desc_c);
+  };
+
+  static const auto ipver2pafdat = [](uint8_t ipver) -> const pafdat_t* {
+    static const pafdat_t pfns4 = { sizeof(struct ip     ), verify_ipv4_packet, route_packet  };
+    static const pafdat_t pfns6 = { sizeof(struct ip6_hdr), verify_ipv6_packet, route6_packet };
+
+    switch(ipver) {
+      case 4:  return &pfns4;
+      case 6:  return &pfns6;
+      // case 15: return &pfnsx;
+      default: return nullptr;
+    }
+  };
+
   srca->seen = last_time;
   const string source_desc = get_remote_desc(srca);
   const auto source_desc_c = source_desc.c_str();
   const auto ipver = (len < 2) ? 255 : reinterpret_cast<const struct ip*>(buffer)->ip_v;
 
-  switch(ipver) {
-    case 0:
-      if(!handle_zprn_pkt(srca, buffer, len, source_desc_c))
-        printf("ROUTER ERROR: got invalid ZPRN packet from %s\n", source_desc_c);
-      return;
-
-    case 4:
-      if(sizeof(struct ip) > len)
-        goto length_error;
-      route_packet(srca, buffer, len, source_desc_c);
-      return;
-
-    case 6:
-      if(sizeof(struct ip6_hdr) > len)
-        goto length_error;
-      route6_packet(srca, buffer, len, source_desc_c);
-      return;
-
-    /* case 15: // IPX */
-    default:
-      printf("ROUTER ERROR: received a packet with unknown payload type (wrong ip_ver = %u) from %s\n", ipver, source_desc_c);
-      return;
+  if(!ipver) {
+    if(!handle_zprn_pkt(srca, buffer, len, source_desc_c))
+      printf("ROUTER ERROR: got invalid ZPRN packet from %s\n", source_desc_c);
+  } else if(const auto pafdat = ipver2pafdat(ipver)) {
+    if(pafdat->hdr_len > len)
+      printf("ROUTER ERROR: received invalid ip packet (too small, size = %u) from %s\n", len, source_desc_c);
+    else if(pafdat->verify(srca, buffer, len, source_desc_c))
+      pafdat->route(srca, buffer, len, source_desc_c);
+  } else {
+    printf("ROUTER ERROR: received a packet with unknown payload type (wrong ip_ver = %u) from %s\n", ipver, source_desc_c);
   }
-
-  length_error:
-    printf("ROUTER ERROR: received invalid ip packet (too small, size = %u) from %s\n", len, source_desc_c);
 }
 
 [[gnu::cold]]
