@@ -41,7 +41,7 @@ void sender_t::enqueue(zprn2_sdat &&dat) {
   {
     const auto ie = dat.dests.end();
     dat.dests.erase(remove_if(dat.dests.begin(), ie,
-      [](const auto &x) noexcept { return !x || x->is_local(); }),
+      [](const auto &x) noexcept { return zs_unlikely(!x) || x->is_local(); }),
       ie);
   }
   dat.dests.shrink_to_fit();
@@ -94,12 +94,12 @@ void sender_t::worker_fn() noexcept {
     const bool is_confirmed = (confirmed_it != zprn_confirmed.end());
     if(is_confirmed) zprn_confirmed.erase(confirmed_it);
     return i->locked_crun([&](const remote_peer_t &o) noexcept {
-      if(o.is_local()) {
+      if(zs_unlikely(o.is_local())) {
         fprintf(stderr, "SENDER INTERNAL ERROR: destination peer is local, use count = %ld, size = %zu\n", i.use_count(), buf.size());
         return;
       }
       const auto fdit = my_server_fds.find(o.saddr.ss_family);
-      if(fdit == my_server_fds.end()) {
+      if(zs_unlikely(fdit == my_server_fds.end())) {
         fprintf(stderr, "SENDER INTERNAL ERROR: destination peer with unknown address family %u, size = %zu\n",
           static_cast<unsigned>(o.saddr.ss_family), buf.size());
         return;
@@ -120,8 +120,8 @@ void sender_t::worker_fn() noexcept {
 #ifdef USE_IPV6
   const auto fdx_inet6 = ([&my_server_fds]() noexcept -> pair<bool, int> {
     const auto it = my_server_fds.find(AF_INET6);
-    if(it == my_server_fds.end()) return {false, 0};
-    return {true, it->second};
+    const bool x = (it != my_server_fds.end());
+    return { x, x ? it->second : 0 };
   })();
 #endif
 
@@ -158,6 +158,11 @@ void sender_t::worker_fn() noexcept {
 #endif
   };
 
+  const auto zprn_rttr = [](zprn2_sdat &i) noexcept {
+    auto &x = i.zprn.route.type;
+    x = htons(x);
+  };
+
   set_df(false);
   set_tos(0);
 
@@ -176,7 +181,7 @@ void sender_t::worker_fn() noexcept {
     {
       unique_lock<mutex> lock(_mtx);
       _cond.wait(lock, [this] { return _stop || !(_tasks.empty() && _zprn_msgs.empty()); });
-      if(_tasks.empty() && _zprn_msgs.empty()) return;
+      if(zs_unlikely(_tasks.empty() && _zprn_msgs.empty())) return;
       tasks = move(_tasks);
       zprn_msgs = move(_zprn_msgs);
     }
@@ -231,8 +236,7 @@ void sender_t::worker_fn() noexcept {
         const size_t zmsiz = i.zprn.get_needed_size();
         const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
         // don't set this earlier, as we need thy host-byte-order.type in get_needed_size
-        auto &x = i.zprn.route.type;
-        x = htons(x);
+        zprn_rttr(i);
         xbuf.reserve(xbuf.size() + zmsiz);
         xbuf.insert(xbuf.end(), zmbeg, zmend);
       }
@@ -249,10 +253,7 @@ void sender_t::worker_fn() noexcept {
     for(auto &i : zprn_msgs) {
       const size_t zmsiz = i.zprn.get_needed_size();
       zprn_buf.reserve(i.dests.size());
-      {
-        auto &x = i.zprn.route.type;
-        x = htons(x);
-      }
+      zprn_rttr(i);
       const char *const zmbeg = reinterpret_cast<const char *>(&i.zprn), *const zmend = zmbeg + zmsiz;
       if(i.confirmed) zprn_confirmed.insert(i.confirmed);
       for(const auto &dest : i.dests) {
@@ -277,7 +278,7 @@ void sender_t::worker_fn() noexcept {
     zprn_buf.clear();
 
    flush_stdstreams:
-    if(got_error) {
+    if(zs_unlikely(got_error)) {
       fflush(stdout);
       fflush(stderr);
     }
