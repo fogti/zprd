@@ -439,7 +439,7 @@ static bool init_all(const string &confpath) {
     }
   }
 
-  chdir("/");
+  { const int z__dummy = chdir("/"); }
   // last_time must be set before any call to routing classes happen
   //  e.g. to remotes or routes
   srand((last_time = time(nullptr)));
@@ -904,6 +904,7 @@ static void route_packet(const remote_peer_detail_ptr_t &source_peer, char *cons
             break;
           default: break;
         }
+        return true;
 
       default:
         return true;

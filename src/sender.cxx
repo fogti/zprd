@@ -36,14 +36,14 @@ void sender_t::enqueue(send_data &&dat) {
 
 void sender_t::enqueue(zprn2_sdat &&dat) {
   // sanitize dat.dests
-  if(dat.dests.empty())
-    return;
   {
     const auto ie = dat.dests.end();
     dat.dests.erase(remove_if(dat.dests.begin(), ie,
       [](const auto &x) noexcept { return zs_unlikely(!x) || x->is_local(); }),
       ie);
   }
+  if(dat.dests.empty())
+    return;
   dat.dests.shrink_to_fit();
 
   // move into queue
