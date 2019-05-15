@@ -9,6 +9,7 @@ LINE FORMAT:
 CMDs:
   #  comment
   A  ip address (they are passed unescaped to iproute2 via system(3))
+  B  block forwarding to this ip address if no route to this address is known
   H  add hook script (runs after tundev is up, before uid change, e.g. as root)
   h  add routing hook script (runs while routing cleanup, with dropped privs, called for each fresh or empty route and peer)
   I  interface

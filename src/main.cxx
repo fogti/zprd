@@ -5,7 +5,7 @@
  * interfaces and UDP.
  *
  * (C) 2010 Davide Brini.
- * (C) 2017 - 2018 Erik Zscheile.
+ * (C) 2017 - 2019 Erik Zscheile.
  *
  * License: GPL-2+
  *
@@ -44,6 +44,7 @@
 #include <fstream>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 // own parts
 #include <config.h>
@@ -88,7 +89,7 @@ unordered_map<sa_family_t, int> server_fds;
 
 static vector<remote_peer_detail_ptr_t> remotes;
 static vector<xner_addr_t> locals;
-static vector<inner_addr_t> exported_locals;
+static unordered_set<inner_addr_t, inner_addr_hash> exported_locals, blocked_broadcast_dsts;
 static unordered_map<inner_addr_t, route_via_t, inner_addr_hash> routes;
 
 static sender_t     sender;
@@ -223,6 +224,20 @@ static bool init_all(const string &confpath) {
     return true;
   };
 
+  static auto resolve_hosts = [](const vector<string> &addr_strv, const char *desc) {
+    unordered_set<inner_addr_t, inner_addr_hash> ret;
+    ret.reserve(addr_strv.size());
+    struct sockaddr_storage xra;
+    zeroify(xra);
+    for(const auto &i : addr_strv) {
+      if(resolve_hostname(i, xra, zprd_conf.preferred_af))
+        ret.emplace(xra);
+      else
+        fprintf(stderr, "CONFIG WARNING: can't resolve %s '%s'\n", desc, i.c_str());
+    }
+    return ret;
+  };
+
   // redirect stdin (don't block terminals)
   {
     const int ofd = open("/dev/null", O_RDONLY);
@@ -257,13 +272,17 @@ static bool init_all(const string &confpath) {
     // is used when we are root and see the 'U' setting in the conf to drop privileges
     string run_as_user;
     string line;
-    vector<string> addrs, exported_addrs, hooks;
+    vector<string> addrs, exported_addrs, blocked_broadcasts_strs, hooks;
     while(getline(in, line)) {
       if(line.empty() || line.front() == '#') continue;
       string arg = line.substr(1);
       switch(line.front()) {
         case 'A':
           addrs.emplace_back(move(arg));
+          break;
+
+        case 'B':
+          blocked_broadcasts_strs.emplace_back(move(arg));
           break;
 
         case 'H':
@@ -357,18 +376,8 @@ static bool init_all(const string &confpath) {
       }
     }
 
-    if(!exported_addrs.empty()) {
-      exported_locals.reserve(exported_addrs.size());
-      struct sockaddr_storage xlocal;
-      zeroify(xlocal);
-      for(const auto &i : exported_addrs) {
-        if(!resolve_hostname(i, xlocal, zprd_conf.preferred_af)) {
-          fprintf(stderr, "CONFIG WARNING: can't resolve exported local '%s'\n", i.c_str());
-          continue;
-        }
-        exported_locals.emplace_back(xlocal);
-      }
-    }
+    exported_locals        = resolve_hosts(exported_addrs         , "exported local");
+    blocked_broadcast_dsts = resolve_hosts(blocked_broadcasts_strs, "blocked broadcast destination ");
 
     runcmd("ip link set" + zs_devstr + " mtu 1472");
 
@@ -500,11 +509,7 @@ static bool am_ii_addr(const inner_addr_t &o, const bool with_exported = true) n
   for(const auto &i : locals)
     if(*reinterpret_cast<const inner_addr_t *>(&i) == o)
       return true;
-  if(with_exported)
-    for(const auto &i : exported_locals)
-      if(i == o)
-        return true;
-  return false;
+  return (with_exported && exported_locals.find(o) != exported_locals.end());
 }
 
 [[gnu::hot]]
@@ -833,6 +838,10 @@ static vector<remote_peer_ptr_t> resolve_route(const remote_peer_detail_ptr_t &s
       return {r->get_router()};
     }
   }
+
+  // early return if broadcasts should be suppressed, prevent log spam
+  if(blocked_broadcast_dsts.find(iaddr_dest) != blocked_broadcast_dsts.end())
+    return {};
 
   printf("ROUTER: no known route to %s\n", destdesc.c_str());
   vector<remote_peer_ptr_t> ret(remotes.cbegin(), remotes.cend());
@@ -1635,6 +1644,7 @@ int main(int argc, char *argv[]) {
   remotes.clear();
   locals.clear();
   exported_locals.clear();
+  blocked_broadcast_dsts.clear();
 
   return retcode;
 }

@@ -1,6 +1,6 @@
 /**
  * zprd_conf.hpp
- * (C) 2018 Erik Zscheile.
+ * (C) 2019 Erik Zscheile.
  * License: GPL-2+
  **/
 #pragma once
